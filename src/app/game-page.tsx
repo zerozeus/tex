@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Play, RotateCw, User, Coins, Timer, ArrowLeft, Terminal, Bot } from 'lucide-react';
+import { Play, RotateCw, User, Coins, ArrowLeft, Terminal, Bot } from 'lucide-react';
 import { API_CONFIG, gameApiClient } from '@/lib/api-client';
 
 // 类型定义
@@ -1151,10 +1151,6 @@ export default function TexasHoldem() {
             <RotateCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''} mr-2`} />
             刷新
           </Button>
-          <div className="flex items-center gap-2 ml-2 bg-black/30 px-3 py-1.5 rounded-full backdrop-blur-sm">
-            <Timer className="w-4 h-4 text-yellow-400" />
-            <span className="font-mono text-yellow-400">{gameState.timeRemaining}s</span>
-          </div>
         </div>
       </div>
 
