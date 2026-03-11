@@ -25,8 +25,8 @@ export class WebSocketHandler {
   private wss: WebSocketServer;
   private clients: Map<string, WSClientWithTimers> = new Map();
   private games: Map<string, GameEngine> = new Map();
-  private readonly HEARTBEAT_INTERVAL = 25000; // 25秒
-  private readonly PING_TIMEOUT = 10000; // 10秒超时
+  private readonly HEARTBEAT_INTERVAL = 45000; // 45秒
+  private readonly PING_TIMEOUT = 20000; // 20秒超时
 
   constructor(options: WebSocketHandlerOptions) {
     if ('port' in options) {

@@ -658,7 +658,7 @@ export default function TexasHoldem() {
           addConsoleLog('info', '正在尝试重连...');
           connectWebSocket();
         }
-      }, 3000);
+      }, 5000);
     };
 
     ws.onerror = (event) => {
