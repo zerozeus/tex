@@ -72,7 +72,7 @@ export default function TexasHoldem() {
   const gameId = searchParams.get('gameId');
   const DEBUG = process.env.NEXT_PUBLIC_POKER_DEBUG === '1';
   const [gameState, setGameState] = useState<GameState | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [betAmount, setBetAmount] = useState<number>(10);
   const [currentPlayerId] = useState<string>('1'); // 假设当前玩家ID为1
@@ -689,10 +689,8 @@ export default function TexasHoldem() {
   useEffect(() => {
     const timerId = setTimeout(() => {
       if (gameId) {
+        setLoading(true);
         void loadGame(gameId);
-      } else {
-        setLoading(false);
-        setError('缺少游戏ID');
       }
     }, 0);
 
