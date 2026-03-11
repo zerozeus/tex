@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import util from 'util';
 
+const isProduction = process.env.NODE_ENV === 'production';
 const LOG_FILE = path.resolve(__dirname, '../../game.log');
 
 type ConsoleArgs = unknown[];
@@ -19,13 +20,16 @@ function formatArgs(args: ConsoleArgs): string {
 }
 
 function appendLogLine(level: string, args: ConsoleArgs): void {
+  if (isProduction) {
+    return;
+  }
   const timestamp = new Date().toISOString();
   const rendered = formatArgs(args);
   const line = `[${timestamp}] [${level}] ${rendered}\n`;
   try {
     fs.appendFileSync(LOG_FILE, line);
   } catch {
-    nativeConsole.error('Failed to write log file:', LOG_FILE);
+    // 生产环境静默失败
   }
 }
 

@@ -18,8 +18,19 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const dev = process.env.NODE_ENV !== 'production';
 const projectRoot = path.resolve(__dirname, '..', '..');
-const nextApp = next({ dev, dir: projectRoot });
-const nextHandler = nextApp.getRequestHandler();
+let nextApp: ReturnType<typeof next>;
+let nextHandler: (req: any, res: any) => void;
+
+try {
+  nextApp = next({ dev, dir: projectRoot });
+  nextHandler = nextApp.getRequestHandler();
+} catch (e) {
+  console.warn('Next.js not available, running in API-only mode');
+  nextHandler = (req, res) => {
+    res.status(404).json({ error: 'Not found' });
+  };
+}
+
 const httpServer = createServer(app);
 
 // 中间件
@@ -372,19 +383,28 @@ app.post('/api/game/next-round', async (req, res) => {
 
 app.all('*', (req, res) => nextHandler(req, res));
 
-void nextApp
-  .prepare()
-  .then(() => {
+async function startServer() {
+  try {
+    if (nextApp && typeof nextApp.prepare === 'function') {
+      try {
+        await nextApp.prepare();
+      } catch (e) {
+        console.warn('Next.js prepare failed, running without Next.js:', e);
+      }
+    }
+    
     httpServer.listen(PORT, () => {
       console.log(`HTTP server running on port ${PORT}`);
       console.log(`WebSocket server running on ws://localhost:${PORT}/ws`);
       console.log(`Health check: http://localhost:${PORT}/health`);
     });
-  })
-  .catch((error) => {
+  } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);
-  });
+  }
+}
+
+void startServer();
 
 // 优雅关闭
 process.on('SIGTERM', () => {
