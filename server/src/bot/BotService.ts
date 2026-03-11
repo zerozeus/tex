@@ -1,4 +1,4 @@
-import { Player, GameState } from '../types';
+import { Player, GameState, GameHistoryEvent } from '../types';
 
 // Node.js 18+ has built-in fetch
 
@@ -23,7 +23,12 @@ export class BotService {
     }
 
     const prompt = this.buildDecisionPrompt(state, botPlayer);
+    const contextSummary = this.buildContextSummary(state, botPlayer);
     
+    console.log(`\n=== 🤖 Bot Context Summary (${botPlayer.name}) ===`);
+    console.log(JSON.stringify(contextSummary, null, 2));
+    console.log('==============================================\n');
+
     console.log(`\n=== 🤖 Bot Prompt (${botPlayer.name}) ===`);
     console.log(prompt);
     console.log('=====================================\n');
@@ -172,34 +177,113 @@ export class BotService {
     const communityDesc = gameState.communityCards.length > 0 
       ? gameState.communityCards.map(card => `${card.rank}${card.suit}`).join(', ') 
       : '暂无';
+    const historyDesc = this.formatActionHistory(gameState.actionHistory ?? []);
     
     const playersDesc = gameState.players
       .filter(p => p.id !== botPlayer.id && !p.isFolded)
-      .map(p => `${p.name}: 筹码${p.chips}, 下注${p.bet}`)
+      .map(p => `- ${p.name}: 筹码 ${p.chips}, 当前下注 ${p.bet}, ${p.isAllIn ? '已全押' : '仍可行动'}`)
       .join('\n');
 
     return `
-你是玩家 ${botPlayer.name}。
+你是德州扑克玩家 ${botPlayer.name}。你只能基于可见信息做决定，不能假设知道他人手牌。
 
-当前游戏状态：
-- 游戏阶段: ${gameState.phase}
+【你的视角】
+- 当前手数: 第 ${gameState.handNumber} 手
+- 当前阶段: ${gameState.phase}
 - 你的手牌: ${handDesc}
 - 公共牌: ${communityDesc}
-- 底池: ${gameState.pot}
-- 当前最高下注: ${gameState.currentBet}
-- 你当前下注: ${botPlayer.bet}
-- 需要跟注: ${toCall}
 - 你的筹码: ${botPlayer.chips}
+- 你本轮已下注: ${botPlayer.bet}
+- 当前最高下注: ${gameState.currentBet}
+- 你还需跟注: ${toCall}
+- 当前底池: ${gameState.pot}
+- 最小加注增量: ${gameState.minRaise}
 
-其他活跃玩家：
-${playersDesc}
+【其他仍在局玩家】
+${playersDesc || '- 无'}
 
-请务必只返回一个 JSON 对象，不要包含任何 markdown 格式或其他文本。格式如下：
+【本手历史上下文】
+${historyDesc}
+
+【决策要求】
+- 结合当前阶段、本手下注历史、对手压力、你的筹码深度做决策。
+- 优先判断当前是否合法行动，以及是否有足够理由激进下注。
+- 如果选择 bet 或 raise，amount 必须是一个具体数字。
+- reason 要简短但要点明确。
+- chat 可选，可以是简短桌上发言。
+
+【输出格式】
+只返回一个 JSON 对象，不要返回 markdown，不要返回解释性前后缀：
 {
   "action": "fold|check|call|bet|raise|allin",
-  "amount": <number> (仅在 bet/raise 时需要),
+  "amount": <number>,
   "reason": "简短决策理由",
-  "chat": "你可以在这里说一句话来迷惑对手或表达情绪（可选）"
+  "chat": "可选"
 }`;
+  }
+
+  private formatActionHistory(history: GameHistoryEvent[]): string {
+    if (history.length === 0) {
+      return '- 暂无历史记录';
+    }
+
+    const recentHistory = history.slice(-24);
+    return recentHistory.map((event) => this.formatHistoryEvent(event)).join('\n');
+  }
+
+  private formatHistoryEvent(event: GameHistoryEvent): string {
+    switch (event.kind) {
+      case 'hand_start':
+        return `- #${event.sequence} [开始] ${event.note}`;
+      case 'blind':
+        return `- #${event.sequence} [${event.phase}] ${event.playerName} 支付${event.blindType === 'small' ? '小盲' : '大盲'} ${event.amount ?? 0}，底池 ${event.pot ?? 0}`;
+      case 'phase_change':
+        return `- #${event.sequence} [转阶段] ${event.note}${event.communityCards?.length ? `，公共牌: ${event.communityCards.join(', ')}` : ''}`;
+      case 'hand_end':
+        return `- #${event.sequence} [结束] ${event.note}`;
+      case 'action': {
+        const amountDesc = event.amount != null ? `，投入 ${event.amount}` : '';
+        const betDesc = event.playerBet != null ? `，本轮下注 ${event.playerBet}` : '';
+        const potDesc = event.pot != null ? `，底池 ${event.pot}` : '';
+        return `- #${event.sequence} [${event.phase}] ${event.playerName} ${event.action}${amountDesc}${betDesc}${potDesc}`;
+      }
+      default:
+        return `- #${event.sequence} ${event.note ?? '未知事件'}`;
+    }
+  }
+
+  private buildContextSummary(gameState: GameState, botPlayer: Player) {
+    const toCall = gameState.currentBet - botPlayer.bet;
+    const visibleOpponents = gameState.players
+      .filter((player) => player.id !== botPlayer.id && !player.isFolded)
+      .map((player) => ({
+        id: player.id,
+        name: player.name,
+        chips: player.chips,
+        bet: player.bet,
+        isAllIn: player.isAllIn,
+        isBot: player.isBot,
+      }));
+
+    return {
+      gameId: gameState.gameId,
+      handNumber: gameState.handNumber,
+      phase: gameState.phase,
+      bot: {
+        id: botPlayer.id,
+        name: botPlayer.name,
+        chips: botPlayer.chips,
+        bet: botPlayer.bet,
+        toCall,
+        cards: botPlayer.cards.map((card) => `${card.rank}${card.suit}`),
+      },
+      board: gameState.communityCards.map((card) => `${card.rank}${card.suit}`),
+      pot: gameState.pot,
+      currentBet: gameState.currentBet,
+      minRaise: gameState.minRaise,
+      visibleOpponents,
+      historyCount: gameState.actionHistory?.length ?? 0,
+      recentHistory: (gameState.actionHistory ?? []).slice(-12).map((event) => this.formatHistoryEvent(event)),
+    };
   }
 }

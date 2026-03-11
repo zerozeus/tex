@@ -26,8 +26,28 @@ export interface Player {
   totalHandBet: number; // 本手牌总下注额
 }
 
+export interface GameHistoryEvent {
+  sequence: number;
+  handNumber: number;
+  kind: 'hand_start' | 'blind' | 'action' | 'phase_change' | 'hand_end';
+  phase: 'preflop' | 'flop' | 'turn' | 'river' | 'showdown' | 'completed' | 'system';
+  createdAt: string;
+  playerId?: string;
+  playerName?: string;
+  blindType?: 'small' | 'big';
+  action?: 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'allin';
+  amount?: number;
+  pot?: number;
+  currentBet?: number;
+  playerBet?: number;
+  chipsAfter?: number;
+  communityCards?: string[];
+  note?: string;
+}
+
 export interface GameState {
   gameId: string;
+  handNumber: number;
   phase: 'preflop' | 'flop' | 'turn' | 'river' | 'showdown' | 'completed';
   endType?: 'hand' | 'game';
   pot: number;
@@ -46,6 +66,7 @@ export interface GameState {
   winAmount?: number; // 结算阶段的赢取金额
   settlementReason?: 'fold' | 'showdown';
   handSummary?: Record<string, { description: string; bestCards: Card[] }>;
+  actionHistory: GameHistoryEvent[];
   settings: {
     smallBlind: number;
     bigBlind: number;

@@ -1,4 +1,4 @@
-import { Card, Player, GameState, GameConfig } from "./types";
+import { Card, Player, GameState, GameConfig, GameHistoryEvent } from "./types";
 import { logger } from "./utils/logger";
 
 // #region debug-point
@@ -184,6 +184,7 @@ export class GameEngine {
 
     const gameState: GameState = {
       gameId,
+      handNumber: 1,
       phase: "preflop",
       pot: 0,
       pots: [], // 初始化奖池列表
@@ -197,6 +198,7 @@ export class GameEngine {
       bigBlindIndex,
       showdownRevealed: false,
       resultReady: false,
+      actionHistory: [],
       settings: {
         smallBlind: config.smallBlind,
         bigBlind: config.bigBlind,
@@ -228,12 +230,15 @@ export class GameEngine {
   private collectBlinds(): void {
     const { players, settings, smallBlindIndex, bigBlindIndex } =
       this.gameState;
+    let smallBlindAmount = 0;
+    let bigBlindAmount = 0;
 
     // 收取小盲注
     if (players[smallBlindIndex].chips >= settings.smallBlind) {
       players[smallBlindIndex].chips -= settings.smallBlind;
       players[smallBlindIndex].bet = settings.smallBlind;
       players[smallBlindIndex].totalHandBet = settings.smallBlind;
+      smallBlindAmount = settings.smallBlind;
       // 盲注不视为已主动行动，除非全押
       players[smallBlindIndex].hasActed = false;
       if (players[smallBlindIndex].chips === 0) {
@@ -245,6 +250,7 @@ export class GameEngine {
       players[smallBlindIndex].bet = actualBlind;
       players[smallBlindIndex].totalHandBet = actualBlind;
       players[smallBlindIndex].chips = 0;
+      smallBlindAmount = actualBlind;
       players[smallBlindIndex].isAllIn = true;
       players[smallBlindIndex].hasActed = true;
     }
@@ -254,6 +260,7 @@ export class GameEngine {
       players[bigBlindIndex].chips -= settings.bigBlind;
       players[bigBlindIndex].bet = settings.bigBlind;
       players[bigBlindIndex].totalHandBet = settings.bigBlind;
+      bigBlindAmount = settings.bigBlind;
       // 盲注不视为已主动行动，除非全押
       players[bigBlindIndex].hasActed = false;
       if (players[bigBlindIndex].chips === 0) {
@@ -265,6 +272,7 @@ export class GameEngine {
       players[bigBlindIndex].bet = actualBlind;
       players[bigBlindIndex].totalHandBet = actualBlind;
       players[bigBlindIndex].chips = 0;
+      bigBlindAmount = actualBlind;
       players[bigBlindIndex].isAllIn = true;
       players[bigBlindIndex].hasActed = true;
     }
@@ -277,6 +285,14 @@ export class GameEngine {
     this.gameState.players.forEach((player, index) => {
       player.isCurrent = index === this.gameState.currentPlayerIndex;
     });
+
+    this.appendHistoryEvent({
+      kind: "hand_start",
+      phase: "system",
+      note: `第 ${this.gameState.handNumber} 手开始，庄家 ${players[this.gameState.dealerIndex].name}`,
+    });
+    this.recordBlindEvent(players[smallBlindIndex], "small", smallBlindAmount);
+    this.recordBlindEvent(players[bigBlindIndex], "big", bigBlindAmount);
   }
 
   public getGameState(): GameState {
@@ -342,6 +358,7 @@ export class GameEngine {
   ): { success: boolean; error?: string } {
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
+    let committedAmount = 0;
 
     if (currentPlayer.id !== playerId) {
       // #region debug-point
@@ -455,6 +472,7 @@ export class GameEngine {
         currentPlayer.chips -= amount;
         currentPlayer.bet += amount;
         currentPlayer.totalHandBet += amount;
+        committedAmount = amount;
         this.gameState.pot += amount;
         this.gameState.currentBet = amount;
         this.gameState.minRaise = amount;
@@ -486,6 +504,7 @@ export class GameEngine {
         currentPlayer.chips -= actualCallAmount;
         currentPlayer.bet += actualCallAmount;
         currentPlayer.totalHandBet += actualCallAmount;
+        committedAmount = actualCallAmount;
         this.gameState.pot += actualCallAmount;
         currentPlayer.hasActed = true;
 
@@ -523,6 +542,7 @@ export class GameEngine {
         currentPlayer.chips -= raiseAmount;
         currentPlayer.bet += raiseAmount;
         currentPlayer.totalHandBet += raiseAmount;
+        committedAmount = raiseAmount;
         this.gameState.pot += raiseAmount;
         this.gameState.currentBet = currentPlayer.bet;
 
@@ -556,6 +576,7 @@ export class GameEngine {
         currentPlayer.chips = 0;
         currentPlayer.bet = totalBetAfterAllIn;
         currentPlayer.totalHandBet += allInAmount;
+        committedAmount = allInAmount;
         this.gameState.pot += allInAmount;
 
         if (totalBetAfterAllIn > this.gameState.currentBet) {
@@ -595,6 +616,11 @@ export class GameEngine {
     }
 
     console.log(`[Action Success] Player: ${currentPlayer.name}, Action: ${action}, NewChips: ${currentPlayer.chips}, NewBet: ${currentPlayer.bet}, Pot: ${this.gameState.pot}`);
+    this.recordActionEvent(
+      currentPlayer,
+      action as GameHistoryEvent["action"],
+      committedAmount
+    );
 
     // 移动到下一个玩家
     this.moveToNextPlayer();
@@ -840,6 +866,14 @@ export class GameEngine {
         this.gameState.phase = "showdown";
         this.gameState.showdownRevealed = true;
         this.gameState.resultReady = false;
+        this.appendHistoryEvent({
+          kind: "phase_change",
+          phase: "showdown",
+          pot: this.gameState.pot,
+          currentBet: this.gameState.currentBet,
+          communityCards: this.gameState.communityCards.map((card) => this.formatCard(card)),
+          note: "进入摊牌阶段",
+        });
         return;
       case "showdown": // Should not happen but safety check
       case "completed":
@@ -848,6 +882,14 @@ export class GameEngine {
 
     this.gameState.currentBet = 0;
     this.gameState.minRaise = this.gameState.settings.bigBlind; // 重置最小加注额
+    this.appendHistoryEvent({
+      kind: "phase_change",
+      phase: this.gameState.phase,
+      pot: this.gameState.pot,
+      currentBet: this.gameState.currentBet,
+      communityCards: this.gameState.communityCards.map((card) => this.formatCard(card)),
+      note: `进入 ${this.gameState.phase} 阶段`,
+    });
 
     // 如果是自动跑牌模式，直接返回，不设置当前玩家，由 runOutBoard 循环继续
     if (isAutoRunout) {
@@ -967,6 +1009,14 @@ export class GameEngine {
       this.gameState.pots = [];
       this.gameState.pot = 0;
       this.gameState.phase = "completed";
+      this.appendHistoryEvent({
+        kind: "hand_end",
+        phase: "completed",
+        playerId: winner.id,
+        playerName: winner.name,
+        amount: this.gameState.winAmount,
+        note: `${winner.name} 因其他玩家弃牌获胜`,
+      });
       // #region debug-point
       traeDebugReport({
         event: "determine_winner_fold_completed",
@@ -1125,6 +1175,12 @@ export class GameEngine {
       this.gameState.endType = survivors.length < 2 ? "game" : "hand";
     }
     this.gameState.phase = "completed";
+    this.appendHistoryEvent({
+      kind: "hand_end",
+      phase: "completed",
+      amount: this.gameState.winAmount,
+      note: `摊牌结算完成，获胜者: ${this.gameState.winners.map((winner) => winner.name).join(", ")}`,
+    });
     // #region debug-point
     traeDebugReport({
       event: "determine_winner_showdown_completed",
@@ -1225,6 +1281,7 @@ export class GameEngine {
     this.gameState.currentPlayerIndex = newCurrentPlayerIndex;
 
     // 重置游戏状态
+    this.gameState.handNumber += 1;
     this.gameState.phase = "preflop";
     this.gameState.pot = 0;
     this.gameState.pots = [];
@@ -1238,12 +1295,67 @@ export class GameEngine {
     this.gameState.winAmount = 0;
     this.gameState.settlementReason = undefined;
     this.gameState.handSummary = undefined;
+    this.gameState.actionHistory = [];
 
     // 发牌
     this.dealCards();
 
     // 收取盲注
     this.collectBlinds();
+  }
+
+  private appendHistoryEvent(
+    event: Omit<GameHistoryEvent, "sequence" | "handNumber" | "createdAt">
+  ): void {
+    this.gameState.actionHistory.push({
+      sequence: this.gameState.actionHistory.length + 1,
+      handNumber: this.gameState.handNumber,
+      createdAt: new Date().toISOString(),
+      ...event,
+    });
+  }
+
+  private recordBlindEvent(
+    player: Player,
+    blindType: "small" | "big",
+    amount: number
+  ): void {
+    this.appendHistoryEvent({
+      kind: "blind",
+      phase: "preflop",
+      playerId: player.id,
+      playerName: player.name,
+      blindType,
+      amount,
+      pot: this.gameState.pot,
+      currentBet: this.gameState.currentBet,
+      playerBet: player.bet,
+      chipsAfter: player.chips,
+      note: blindType === "small" ? "支付小盲" : "支付大盲",
+    });
+  }
+
+  private recordActionEvent(
+    player: Player,
+    action: GameHistoryEvent["action"],
+    committedAmount: number
+  ): void {
+    this.appendHistoryEvent({
+      kind: "action",
+      phase: this.gameState.phase,
+      playerId: player.id,
+      playerName: player.name,
+      action,
+      amount: committedAmount > 0 ? committedAmount : undefined,
+      pot: this.gameState.pot,
+      currentBet: this.gameState.currentBet,
+      playerBet: player.bet,
+      chipsAfter: player.chips,
+    });
+  }
+
+  private formatCard(card: Card): string {
+    return `${card.rank}${card.suit}`;
   }
 
   /**
