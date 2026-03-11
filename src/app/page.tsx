@@ -692,6 +692,7 @@ export default function TexasHoldem() {
         void loadGame(gameId);
       } else {
         setLoading(false);
+        setError('缺少游戏ID');
       }
     }, 0);
 
@@ -903,11 +904,46 @@ export default function TexasHoldem() {
   }
 
   if (!gameState) {
+    // 如果没有 gameId，显示引导界面
+    if (!gameId) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
+          <Card className="p-8 max-w-lg w-full bg-white/10 border-white/20 backdrop-blur">
+            <div className="text-center">
+              <div className="mb-6 flex justify-center">
+                <div className="w-20 h-20 bg-gradient-to-br from-green-500 to-green-700 rounded-full flex items-center justify-center">
+                  <span className="text-4xl">🃏</span>
+                </div>
+              </div>
+              <h1 className="text-3xl font-bold text-white mb-2">德州扑克</h1>
+              <p className="text-gray-300 mb-6">Texas Hold'em</p>
+              <p className="text-gray-400 mb-8">
+                欢迎来到德州扑克游戏！<br />
+                点击下方按钮开始游戏设置
+              </p>
+              <Button
+                onClick={() => router.push('/setup')}
+                className="bg-gradient-to-r from-green-500 to-green-700 hover:from-green-600 hover:to-green-800 text-white font-semibold px-8 py-3"
+              >
+                <Play className="w-5 h-5 mr-2" />
+                开始游戏
+              </Button>
+              {error && (
+                <p className="mt-4 text-red-400 text-sm">{error}</p>
+              )}
+            </div>
+          </Card>
+        </div>
+      );
+    }
+    
+    // 如果有 gameId 但 gameState 为 null，显示错误
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
         <div className="text-center">
           <p className="text-red-600 mb-4">游戏初始化失败</p>
-          <Button onClick={() => router.push('/setup')}>重新初始化</Button>
+          <p className="text-gray-400 mb-4">游戏ID: {gameId}</p>
+          <Button onClick={() => router.push('/setup')}>返回设置</Button>
         </div>
       </div>
     );
