@@ -151,6 +151,8 @@ export default function TexasHoldem() {
   const [resultRevealCountdown, setResultRevealCountdown] = useState(0);
   const nextRoundInFlightRef = useRef(false);
   const [nextRoundInFlight, setNextRoundInFlight] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
+  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const debugLog = (...args: unknown[]) => {
     if (!DEBUG) return;
@@ -604,7 +606,8 @@ export default function TexasHoldem() {
     }
   };
 
-  useEffect(() => {
+  // WebSocket 连接函数
+  const connectWebSocket = () => {
     if (!gameState?.gameId) return;
 
     let wsUrl = '';
@@ -621,25 +624,47 @@ export default function TexasHoldem() {
       wsUrl = `${protocol}://${window.location.host}/ws`;
     }
 
+    debugLog('ws connecting', { wsUrl, gameId: gameState.gameId });
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
     let active = true;
 
     ws.onopen = () => {
+      if (!active) return;
       debugLog('ws open', { wsUrl, gameId: gameState.gameId, playerId: currentPlayerId });
+      setWsConnected(true);
       addConsoleLog('info', `WebSocket 已连接: ${wsUrl}`);
       ws.send(JSON.stringify({ type: 'join_game', data: { gameId: gameState.gameId, playerId: currentPlayerId } }));
+      
+      // 清除重连定时器
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (!active) return;
-      debugLog('ws close');
-      addConsoleLog('error', 'WebSocket 已断开');
+      debugLog('ws close', { code: event.code, reason: event.reason });
+      setWsConnected(false);
+      addConsoleLog('error', `WebSocket 已断开 (${event.code})，3秒后自动重连...`);
+      
+      // 尝试重连
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
+      reconnectTimerRef.current = setTimeout(() => {
+        if (active && gameState?.gameId) {
+          addConsoleLog('info', '正在尝试重连...');
+          connectWebSocket();
+        }
+      }, 3000);
     };
 
-    ws.onerror = () => {
+    ws.onerror = (event) => {
       if (!active) return;
-      debugLog('ws error');
+      debugLog('ws error', event);
+      setWsConnected(false);
       addConsoleLog('error', 'WebSocket 发生错误');
     };
 
@@ -676,8 +701,25 @@ export default function TexasHoldem() {
 
     return () => {
       active = false;
-      if (wsRef.current === ws) wsRef.current = null;
-      ws.close();
+    };
+  };
+
+  useEffect(() => {
+    if (!gameState?.gameId) return;
+
+    // 初始连接
+    const cleanup = connectWebSocket();
+
+    return () => {
+      cleanup?.();
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
     };
   }, [gameState?.gameId]);
 
@@ -1147,6 +1189,10 @@ export default function TexasHoldem() {
             <RotateCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''} mr-2`} />
             刷新
           </Button>
+          <div className={`flex items-center gap-2 ml-2 px-3 py-1.5 rounded-full backdrop-blur-sm ${wsConnected ? 'bg-green-500/30 border border-green-500/50' : 'bg-red-500/30 border border-red-500/50 animate-pulse'}`}>
+            <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-400' : 'bg-red-400'}`}></div>
+            <span className="text-xs text-white">{wsConnected ? '已连接' : '断开中'}</span>
+          </div>
         </div>
       </div>
 
