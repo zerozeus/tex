@@ -1,11 +1,10 @@
 [project]
-entrypoint = "index.html"
-requires = ["python-3.12"]
+requires = ["nodejs-24"]
 
 [dev]
-build = []
-run = ["python", "-m", "http.server", "5000", "--bind", "0.0.0.0"]
+build = ["pnpm", "install"]
+run = ["cd", "server", "&&", "pnpm", "dev"]
 
 [deploy]
-build = []
-run = ["python", "-m", "http.server", "5000", "--bind", "0.0.0.0"]
+build = ["pnpm", "install"]
+run = ["cd", "server", "&&", "pnpm", "dev"]

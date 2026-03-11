@@ -1,0 +1,1909 @@
+# Agent 德州竞技场后端开发文档
+
+## 1. 文档目标
+
+本文档用于指导一个 **Agent Texas Hold'em（无限注德州扑克）竞技场后端** 的设计与开发，目标是实现一套可用于：
+
+- 真人/Agent 混合对局
+- Agent vs Agent 自动对战
+- 观战与回放
+- 可扩展的规则引擎
+- 可接入前端实时展示
+- 可支持后续锦标赛、排行榜、训练场、策略分析
+
+本文档重点覆盖：
+
+- 系统目标与范围
+- 核心规则抽象
+- 状态机设计
+- 数据结构设计
+- API 设计
+- WebSocket 事件设计
+- 核心流程设计
+- 结算与边池设计
+- Agent 接入方式
+- 存储设计
+- 并发与容错设计
+- 测试方案
+- MVP 开发计划
+
+---
+
+## 2. 项目范围
+
+## 2.1 MVP 范围
+
+MVP 先支持以下能力：
+
+1. 6 人桌无限注德州（NLHE）
+2. 创建房间 / 加入房间 / 开始对局
+3. 发牌、下注轮转、公共牌发放、比牌、结算
+4. fold / check / call / bet / raise / all-in
+5. 主池 / 边池
+6. 真人玩家和 Agent 玩家统一走同一套规则
+7. WebSocket 实时推送牌局状态
+8. 房间级别单线程串行状态推进
+9. 支持简单回放日志
+10. 支持下一手自动开始
+
+## 2.2 非 MVP 范围
+
+以下功能可放后续版本：
+
+- 锦标赛
+- 保险
+- RIT（Run It Twice）
+- Straddle
+- 多牌桌联赛
+- 复杂托管策略
+- 真随机硬件熵源
+- GTO 分析器
+- 风控反作弊
+- 复杂观战权限系统
+
+---
+
+## 3. 技术目标
+
+后端需要满足以下要求：
+
+### 3.1 正确性
+
+优先级最高。必须保证：
+
+- 出牌顺序正确
+- 合法动作校验正确
+- 最小加注规则正确
+- 轮次推进正确
+- 主池/边池拆分正确
+- 牌型比较正确
+- 结算正确
+
+### 3.2 可扩展性
+
+需要方便扩展：
+
+- 接入不同 Agent
+- 从 6-max 扩到 9-max
+- 从现金桌扩到锦标赛
+- 增加观战、录像、分析等模块
+
+### 3.3 可观测性
+
+要求：
+
+- 每手牌有完整 action log
+- 有关键指标埋点
+- 有 room/game/hand 维度日志
+- 支持问题复盘
+
+### 3.4 实时性
+
+房间内操作需要低延迟，推荐目标：
+
+- 单步动作处理 < 50ms（不含 Agent 思考耗时）
+- 状态广播 < 100ms
+- Agent 超时可控
+
+---
+
+## 4. 总体架构
+
+推荐采用分层架构：
+
+```text
+Client / Frontend
+    ↓ WebSocket / HTTP
+Gateway / Room API
+    ↓
+Room Service（房间编排）
+    ↓
+Game Engine（德州规则引擎）
+    ↓
+Settlement / Hand Evaluator
+    ↓
+Storage / Replay / Metrics
+
+Agent Adapter
+    ↘
+     Agent Runtime / LLM / Bot Strategy
+```
+
+### 4.1 模块划分
+
+#### A. Room Service
+负责：
+
+- 创建房间
+- 玩家入座/离座
+- 开始对局
+- 驱动每手牌开始与结束
+- 管理房间生命周期
+- 接收动作请求并串行处理
+
+#### B. Game Engine
+负责：
+
+- 发牌
+- 状态机推进
+- 校验动作合法性
+- 控制下注轮
+- 控制街（preflop/flop/turn/river）推进
+- showdown
+- 结算
+
+#### C. Hand Evaluator
+负责：
+
+- 7 张牌选最佳 5 张
+- 牌型判定
+- 比较大小
+
+#### D. Agent Adapter
+负责：
+
+- 将当前对局状态转成 Agent 可理解的输入
+- 等待 Agent 输出动作
+- 做动作兜底与超时保护
+
+#### E. Replay / Storage
+负责：
+
+- 持久化手牌摘要
+- 保存 action log
+- 保存结果快照
+- 支持后续回放
+
+---
+
+## 5. 核心领域模型
+
+## 5.1 基本概念
+
+### Table
+牌桌，包含固定座位、盲注配置、玩家列表。
+
+### Room
+房间，围绕一个 Table 运行，控制牌局开始/结束、房间事件。
+
+### Hand
+一手牌，从洗牌发底牌开始，到结算结束。
+
+### Street
+一手牌中的阶段：
+
+- preflop
+- flop
+- turn
+- river
+- showdown
+- settled
+
+### Player
+牌桌参与者，可能是：
+
+- human
+- agent
+- observer（观战者，不参与）
+
+---
+
+## 5.2 关键枚举
+
+```ts
+export type Street = 'waiting' | 'preflop' | 'flop' | 'turn' | 'river' | 'showdown' | 'settled';
+
+export type PlayerStatus =
+  | 'active'      // 正常参与
+  | 'folded'      // 本手已弃牌
+  | 'allin'       // 本手全下
+  | 'out'         // 筹码归零，无法继续
+  | 'sitting_out';
+
+export type PlayerType = 'human' | 'agent';
+
+export type ActionType =
+  | 'fold'
+  | 'check'
+  | 'call'
+  | 'bet'
+  | 'raise'
+  | 'allin'
+  | 'post_sb'
+  | 'post_bb'
+  | 'deal_hole'
+  | 'deal_flop'
+  | 'deal_turn'
+  | 'deal_river'
+  | 'showdown'
+  | 'settle';
+```
+
+---
+
+## 5.3 核心对象定义
+
+### PlayerState
+
+```ts
+export interface PlayerState {
+  playerId: string;
+  type: PlayerType;
+  seat: number;
+  chips: number;
+  status: PlayerStatus;
+  holeCards: string[];
+  actedThisStreet: boolean;
+  betThisStreet: number;
+  betThisHand: number;
+  isDealer: boolean;
+  isSmallBlind: boolean;
+  isBigBlind: boolean;
+  disconnected: boolean;
+  autoFold: boolean;
+}
+```
+
+### Pot
+
+```ts
+export interface Pot {
+  potId: string;
+  amount: number;
+  eligiblePlayerIds: string[];
+}
+```
+
+### ActionRecord
+
+```ts
+export interface ActionRecord {
+  actionNo: number;
+  handId: string;
+  street: Street;
+  playerId: string;
+  action: ActionType;
+  amount: number;
+  chipsAfter: number;
+  createdAt: number;
+}
+```
+
+### HandState
+
+```ts
+export interface HandState {
+  handId: string;
+  tableId: string;
+  street: Street;
+  deck: string[];
+  board: string[];
+  players: PlayerState[];
+  dealerSeat: number;
+  sbSeat: number;
+  bbSeat: number;
+  actingSeat: number | null;
+  currentBet: number;
+  minRaise: number;
+  pots: Pot[];
+  lastAggressorSeat: number | null;
+  actionSeq: number;
+  startedAt: number;
+  endedAt?: number;
+  logs: ActionRecord[];
+}
+```
+
+### RoomState
+
+```ts
+export interface RoomState {
+  roomId: string;
+  tableId: string;
+  status: 'idle' | 'running' | 'paused' | 'closed';
+  maxPlayers: number;
+  smallBlind: number;
+  bigBlind: number;
+  ante: number;
+  handNo: number;
+  currentHand?: HandState;
+}
+```
+
+---
+
+## 6. 规则引擎设计
+
+## 6.1 基本牌局流程
+
+一手牌完整流程：
+
+```text
+start_hand
+  -> rotate_button
+  -> assign_blinds
+  -> shuffle_deck
+  -> deal_hole_cards
+  -> preflop_betting
+  -> if one_player_left: settle
+  -> deal_flop
+  -> flop_betting
+  -> if one_player_left: settle
+  -> deal_turn
+  -> turn_betting
+  -> if one_player_left: settle
+  -> deal_river
+  -> river_betting
+  -> showdown
+  -> settle
+  -> next_hand
+```
+
+---
+
+## 6.2 庄位与盲注规则
+
+对于 6-max 常规桌：
+
+- dealer button 每手顺时针移动到下一位在局玩家
+- SB 为 dealer 左手第一位在局玩家
+- BB 为 SB 左手第一位在局玩家
+- preflop 首个行动玩家为 BB 左手第一位在局玩家
+- flop / turn / river 首个行动玩家为 dealer 左手第一位仍未弃牌且未出局玩家
+
+注意：
+
+- 只剩 2 人时是 heads-up 特殊规则：dealer 同时是 SB，另一位是 BB，preflop 先由 dealer 行动
+- MVP 可以先支持 3 人及以上，再补 heads-up；如果直接支持，必须单独测试
+
+---
+
+## 6.3 合法动作规则
+
+某个玩家在自己回合可做的动作，取决于：
+
+- 当前需补差额 `toCall = currentBet - player.betThisStreet`
+- 玩家剩余筹码 `chips`
+- 当前是否存在下注
+- 当前最小加注额 `minRaise`
+
+### 6.3.1 无需跟注时
+
+当 `toCall == 0`：
+
+- 可 `check`
+- 可 `bet`
+- 可 `allin`
+
+### 6.3.2 需要跟注时
+
+当 `toCall > 0`：
+
+- 可 `fold`
+- 可 `call`
+- 可 `raise`
+- 可 `allin`
+
+### 6.3.3 规则细节
+
+#### Fold
+无条件可执行。
+
+#### Check
+仅在 `toCall == 0` 时可执行。
+
+#### Call
+- 金额为 `min(toCall, chips)`
+- 若 `chips <= toCall`，本质是 call all-in
+
+#### Bet
+仅在当前街无人下注时允许。
+
+#### Raise
+要求：
+
+- 新总下注额 `newBet > currentBet`
+- 加注幅度通常至少是 `minRaise`
+- `raiseAmount = newBet - currentBet`
+- 若未达到完整最小加注，通常只允许作为 all-in，但不会重新开启后续玩家的再加注权
+
+#### All-in
+可以在任意时点发生，但需要区分：
+
+- all-in call
+- all-in raise（完整加注）
+- 不完整加注 all-in
+
+这是规则实现中最容易错的部分之一。
+
+---
+
+## 6.4 一轮下注何时结束
+
+一个 betting round 结束，需要满足：
+
+1. 所有仍需行动的玩家都已行动
+2. 所有未弃牌且非 all-in 玩家都已对齐当前下注额
+3. 没有新的有效加注待响应
+
+更工程化的判断方式：
+
+- 遍历所有 `status in [active]` 的玩家
+- 若存在玩家：
+  - 未 actedThisStreet
+  - 或 betThisStreet < currentBet
+  则本轮未结束
+- 若所有 active 玩家都满足：
+  - actedThisStreet == true
+  - betThisStreet == currentBet
+  则本轮结束
+
+注意：
+
+- all-in 玩家不要求继续行动
+- folded 玩家不参与判断
+
+---
+
+## 6.5 直接提前结束一手牌的条件
+
+若任意时刻只剩 1 名未弃牌玩家：
+
+- 该玩家直接赢下所有当前底池
+- 不需要继续发牌
+- 直接进入 settled
+
+若剩余玩家全部为 `allin` 或没有可行动玩家：
+
+- 可直接把剩余公共牌一次性发完
+- 进入 showdown
+- 再结算
+
+---
+
+## 7. 牌型判断设计
+
+## 7.1 输入输出
+
+输入：
+
+- 玩家两张手牌
+- 最多五张公共牌
+
+输出：
+
+- 最佳五张组合
+- 牌型级别
+- 比较向量（用于排序）
+
+### 示例输出
+
+```ts
+export interface HandRank {
+  category: number;     // 8=straight flush ... 0=high card
+  bestFive: string[];
+  rankVector: number[]; // 例如 [6, 14, 13] 代表葫芦 AAAKK
+  label: string;
+}
+```
+
+---
+
+## 7.2 牌型顺序
+
+从大到小：
+
+1. Straight Flush
+2. Four of a Kind
+3. Full House
+4. Flush
+5. Straight
+6. Three of a Kind
+7. Two Pair
+8. One Pair
+9. High Card
+
+内部比较规则：
+
+- 先比牌型等级
+- 同牌型再比关键牌
+- 再比 kicker
+
+---
+
+## 7.3 实现建议
+
+可选两种方式：
+
+### 方案 A：自研 evaluator
+优点：
+
+- 可控
+- 方便调试
+- 适合 Go/Java/TS 自己实现
+
+缺点：
+
+- 容易出错
+- 测试成本高
+
+### 方案 B：使用成熟 evaluator 库
+优点：
+
+- 正确性更高
+- 开发快
+
+缺点：
+
+- 需要适配语言/许可证
+
+建议：
+
+- MVP 若语言生态成熟，优先复用 evaluator
+- 规则引擎与 evaluator 解耦，做成接口
+
+```ts
+export interface HandEvaluator {
+  evaluate(cards7: string[]): HandRank;
+  compare(aCards7: string[], bCards7: string[]): number;
+}
+```
+
+---
+
+## 8. 主池与边池设计
+
+## 8.1 为什么需要边池
+
+当多个玩家筹码不同并 all-in 时，不能把所有筹码放进同一个池统一比较。必须按可参与额度拆分。
+
+### 示例
+
+- A: 100 all-in
+- B: 300 all-in
+- C: 500 all-in
+
+那么应拆为：
+
+- 主池：100 × 3 = 300，A/B/C 都可争夺
+- 边池1：200 × 2 = 400，B/C 可争夺
+- 边池2：200 × 1 = 200，仅 C 自动获得或无需比牌
+
+---
+
+## 8.2 边池拆分算法
+
+推荐基于每个玩家本手累计投入 `betThisHand` 来拆分。
+
+### 输入
+
+```ts
+[
+  { playerId: 'A', committed: 100, live: true },
+  { playerId: 'B', committed: 300, live: true },
+  { playerId: 'C', committed: 500, live: true },
+  { playerId: 'D', committed: 500, live: false },
+]
+```
+
+### 算法思路
+
+1. 收集所有 `committed > 0` 玩家
+2. 按 committed 升序排序
+3. 逐层切片：
+   - 第 1 层取最小值 100
+   - 所有 committed >= 100 的人共同贡献 100
+   - 形成一个 pot
+4. 再对剩余部分继续做同样处理
+5. 每个 pot 的 eligiblePlayerIds 只包含未弃牌的玩家
+
+### 伪代码
+
+```ts
+function buildSidePots(players) {
+  const levels = uniqueSorted(players.map(p => p.betThisHand).filter(x => x > 0));
+  const pots = [];
+  let prev = 0;
+
+  for (const level of levels) {
+    const contributors = players.filter(p => p.betThisHand >= level);
+    const slice = level - prev;
+    const amount = contributors.length * slice;
+    const eligible = contributors.filter(p => p.status !== 'folded').map(p => p.playerId);
+
+    if (amount > 0) {
+      pots.push({ amount, eligiblePlayerIds: eligible });
+    }
+    prev = level;
+  }
+
+  return pots;
+}
+```
+
+---
+
+## 8.3 结算规则
+
+对每个 pot：
+
+1. 找出 eligiblePlayerIds
+2. 比较这些玩家牌力
+3. 找到最佳牌力玩家集合 winners
+4. 平分该 pot
+5. 奇数筹码的余数按照约定分配（通常从庄位左侧开始）
+
+---
+
+## 9. 状态机设计
+
+## 9.1 手级状态机
+
+```text
+WAITING
+  -> STARTING_HAND
+  -> POST_BLINDS
+  -> DEAL_HOLE
+  -> PRE_FLOP_ACTION
+  -> DEAL_FLOP
+  -> FLOP_ACTION
+  -> DEAL_TURN
+  -> TURN_ACTION
+  -> DEAL_RIVER
+  -> RIVER_ACTION
+  -> SHOWDOWN
+  -> SETTLEMENT
+  -> HAND_FINISHED
+  -> NEXT_HAND
+```
+
+建议对外只暴露精简 street，对内使用更细致 phase。
+
+### 内部 phase 枚举
+
+```ts
+export type HandPhase =
+  | 'starting_hand'
+  | 'posting_blinds'
+  | 'dealing_hole'
+  | 'acting_preflop'
+  | 'dealing_flop'
+  | 'acting_flop'
+  | 'dealing_turn'
+  | 'acting_turn'
+  | 'dealing_river'
+  | 'acting_river'
+  | 'showdown'
+  | 'settlement'
+  | 'finished';
+```
+
+---
+
+## 9.2 房间级状态机
+
+```text
+IDLE
+  -> READY
+  -> RUNNING
+  -> HAND_FINISHED
+  -> RUNNING
+  -> PAUSED
+  -> CLOSED
+```
+
+含义：
+
+- IDLE：没人/未准备
+- READY：满足最小开局人数
+- RUNNING：牌局中
+- PAUSED：暂停
+- CLOSED：房间结束
+
+---
+
+## 10. 动作处理流程
+
+## 10.1 通用处理管线
+
+任意动作请求都走统一入口：
+
+```text
+receive_action_request
+  -> auth_check
+  -> room_check
+  -> turn_check
+  -> legality_check
+  -> apply_action
+  -> append_log
+  -> maybe_advance_street
+  -> maybe_showdown
+  -> maybe_settle
+  -> broadcast_state
+```
+
+---
+
+## 10.2 applyAction 伪代码
+
+```ts
+function applyAction(state: HandState, playerId: string, req: ActionRequest): HandState {
+  const p = getPlayer(state, playerId);
+  const toCall = state.currentBet - p.betThisStreet;
+
+  switch (req.action) {
+    case 'fold':
+      p.status = 'folded';
+      break;
+
+    case 'check':
+      assert(toCall === 0);
+      p.actedThisStreet = true;
+      break;
+
+    case 'call': {
+      const pay = Math.min(toCall, p.chips);
+      p.chips -= pay;
+      p.betThisStreet += pay;
+      p.betThisHand += pay;
+      p.actedThisStreet = true;
+      if (p.chips === 0) p.status = 'allin';
+      break;
+    }
+
+    case 'bet': {
+      assert(state.currentBet === 0);
+      const pay = req.amount;
+      p.chips -= pay;
+      p.betThisStreet += pay;
+      p.betThisHand += pay;
+      p.actedThisStreet = true;
+      state.currentBet = p.betThisStreet;
+      state.minRaise = pay;
+      state.lastAggressorSeat = p.seat;
+      resetOthersActedThisStreet(state, p.playerId);
+      if (p.chips === 0) p.status = 'allin';
+      break;
+    }
+
+    case 'raise': {
+      const newTotal = req.amount;
+      const raiseSize = newTotal - state.currentBet;
+      const needPay = newTotal - p.betThisStreet;
+      p.chips -= needPay;
+      p.betThisStreet = newTotal;
+      p.betThisHand += needPay;
+      p.actedThisStreet = true;
+      state.currentBet = newTotal;
+      state.minRaise = raiseSize;
+      state.lastAggressorSeat = p.seat;
+      resetOthersActedThisStreet(state, p.playerId);
+      if (p.chips === 0) p.status = 'allin';
+      break;
+    }
+
+    case 'allin':
+      // 需要额外判断是 call 还是 raise，以及是否构成完整加注
+      break;
+  }
+
+  state.actionSeq += 1;
+  state.actingSeat = findNextActingSeat(state, p.seat);
+  return state;
+}
+```
+
+---
+
+## 11. 街推进设计
+
+## 11.1 进入下一街要做什么
+
+当一轮下注结束：
+
+1. 将所有玩家 `betThisStreet` 归入总下注记录（若已单独累加 betThisHand 则无需额外处理）
+2. 将 `betThisStreet` 重置为 0
+3. 将 `actedThisStreet` 重置为 false
+4. `currentBet = 0`
+5. `minRaise = bigBlind`（或按规则重置）
+6. 发公共牌
+7. 设置新的 actingSeat
+
+---
+
+## 11.2 街推进函数
+
+```ts
+function advanceStreet(state: HandState): HandState {
+  resetStreetFlags(state.players);
+  state.currentBet = 0;
+  state.minRaise = getBigBlindAmount(state);
+
+  switch (state.street) {
+    case 'preflop':
+      state.street = 'flop';
+      state.board.push(draw(state.deck), draw(state.deck), draw(state.deck));
+      break;
+    case 'flop':
+      state.street = 'turn';
+      state.board.push(draw(state.deck));
+      break;
+    case 'turn':
+      state.street = 'river';
+      state.board.push(draw(state.deck));
+      break;
+    case 'river':
+      state.street = 'showdown';
+      break;
+  }
+
+  state.actingSeat = findFirstToActForStreet(state);
+  return state;
+}
+```
+
+---
+
+## 12. Showdown 设计
+
+## 12.1 进入 showdown 条件
+
+- river 下注轮结束
+- 或剩余玩家全部 all-in 且公共牌已补齐
+
+## 12.2 Showdown 步骤
+
+1. 收集所有未弃牌玩家
+2. 为每位玩家用 evaluator 计算 7 张牌的 HandRank
+3. 构造 pots
+4. 针对每个 pot 找出赢家
+5. 分配筹码
+6. 生成结算日志
+7. 更新玩家 chips
+8. 标记 busted 玩家
+
+---
+
+## 12.3 结算结果结构
+
+```ts
+export interface PotResult {
+  potId: string;
+  amount: number;
+  winners: string[];
+  share: number;
+}
+
+export interface SettlementResult {
+  handId: string;
+  potResults: PotResult[];
+  playerDelta: Record<string, number>;
+  handRanks: Record<string, HandRank>;
+}
+```
+
+---
+
+## 13. 房间编排设计
+
+## 13.1 单房间串行原则
+
+强烈建议：
+
+- **每个 room 内的状态变更必须串行执行**
+- 不允许多个动作并发修改同一份 handState
+
+推荐做法：
+
+- 每个房间一个 event loop / mailbox
+- 外部请求转成 room command
+- 房间 goroutine / actor 顺序消费
+
+### Go 版推荐
+
+```text
+RoomManager
+  -> map[roomId]*RoomActor
+RoomActor
+  -> commandChan
+  -> loop() 串行执行
+```
+
+这样能天然避免：
+
+- 重复出牌
+- 回合错乱
+- 状态覆盖
+- 广播顺序不一致
+
+---
+
+## 13.2 命令模型
+
+```ts
+export type RoomCommand =
+  | { type: 'join'; playerId: string }
+  | { type: 'leave'; playerId: string }
+  | { type: 'start_game' }
+  | { type: 'player_action'; playerId: string; action: ActionRequest }
+  | { type: 'agent_action_timeout'; playerId: string }
+  | { type: 'next_hand' };
+```
+
+---
+
+## 14. Agent 接入设计
+
+## 14.1 设计目标
+
+Agent 不应直接改游戏状态，只能：
+
+- 接收状态摘要
+- 返回动作建议
+
+游戏状态修改只能通过规则引擎完成。
+
+---
+
+## 14.2 Agent 输入
+
+建议给 Agent 的输入为结构化 JSON，而不是完整内部状态。
+
+```json
+{
+  "hand_id": "h_123",
+  "street": "turn",
+  "hero": {
+    "player_id": "agent_1",
+    "chips": 820,
+    "hole_cards": ["Ah", "Kd"],
+    "to_call": 40,
+    "position": "BTN"
+  },
+  "board": ["Qs", "Jh", "Tc", "2d"],
+  "pot": 180,
+  "current_bet": 40,
+  "min_raise_to": 80,
+  "opponents": [
+    { "seat": 1, "chips": 640, "status": "active" },
+    { "seat": 2, "chips": 1200, "status": "active" }
+  ],
+  "allowed_actions": [
+    { "action": "fold" },
+    { "action": "call", "amount": 40 },
+    { "action": "raise", "min": 80, "max": 820 },
+    { "action": "allin", "amount": 820 }
+  ],
+  "action_history": [
+    { "street": "turn", "player_id": "p2", "action": "bet", "amount": 40 }
+  ]
+}
+```
+
+---
+
+## 14.3 Agent 输出
+
+```json
+{
+  "action": "call",
+  "amount": 40,
+  "reasoning": "optional"
+}
+```
+
+注意：
+
+- `reasoning` 不参与规则执行
+- 后端必须再次做合法性校验
+- 非法动作必须兜底
+
+---
+
+## 14.4 Agent 超时策略
+
+建议：
+
+- 给 Agent 设置 action timeout，例如 5s / 10s
+- 超时默认动作：
+  - 能 check 则 check
+  - 否则 fold
+
+这样房间不会被 Agent 卡死。
+
+---
+
+## 15. API 设计
+
+## 15.1 HTTP API
+
+### 创建房间
+
+`POST /api/rooms`
+
+请求：
+
+```json
+{
+  "max_players": 6,
+  "small_blind": 10,
+  "big_blind": 20,
+  "ante": 0,
+  "auto_start": true
+}
+```
+
+响应：
+
+```json
+{
+  "room_id": "room_123",
+  "table_id": "table_123"
+}
+```
+
+### 加入房间
+
+`POST /api/rooms/{roomId}/join`
+
+```json
+{
+  "player_id": "u_1",
+  "type": "human",
+  "buy_in": 2000,
+  "seat": 3
+}
+```
+
+### 加入 Agent
+
+`POST /api/rooms/{roomId}/join-agent`
+
+```json
+{
+  "player_id": "agent_1",
+  "agent_type": "llm_bot",
+  "buy_in": 2000,
+  "seat": 4,
+  "config": {
+    "model": "gpt-like",
+    "timeout_ms": 8000
+  }
+}
+```
+
+### 开始游戏
+
+`POST /api/rooms/{roomId}/start`
+
+### 获取房间快照
+
+`GET /api/rooms/{roomId}`
+
+### 获取手牌回放
+
+`GET /api/hands/{handId}`
+
+---
+
+## 15.2 WebSocket API
+
+连接：
+
+`GET /ws/rooms/{roomId}`
+
+客户端上行消息：
+
+```json
+{
+  "type": "player_action",
+  "player_id": "u_1",
+  "hand_id": "h_1",
+  "action": "raise",
+  "amount": 120
+}
+```
+
+服务端下行消息类型建议：
+
+### room_snapshot
+
+```json
+{
+  "type": "room_snapshot",
+  "room": {}
+}
+```
+
+### hand_started
+
+```json
+{
+  "type": "hand_started",
+  "hand_id": "h_10",
+  "dealer_seat": 2,
+  "sb_seat": 3,
+  "bb_seat": 4
+}
+```
+
+### state_update
+
+```json
+{
+  "type": "state_update",
+  "hand_id": "h_10",
+  "street": "flop",
+  "board": ["Ah", "7s", "2d"],
+  "pot": 120,
+  "current_bet": 40,
+  "acting_seat": 5,
+  "players": []
+}
+```
+
+### action_applied
+
+```json
+{
+  "type": "action_applied",
+  "hand_id": "h_10",
+  "player_id": "u_1",
+  "action": "call",
+  "amount": 40
+}
+```
+
+### showdown_result
+
+```json
+{
+  "type": "showdown_result",
+  "hand_id": "h_10",
+  "board": ["Ah", "Kh", "Qd", "Js", "Tc"],
+  "ranks": {
+    "u_1": { "label": "Straight" },
+    "agent_1": { "label": "Two Pair" }
+  }
+}
+```
+
+### settlement_result
+
+```json
+{
+  "type": "settlement_result",
+  "hand_id": "h_10",
+  "pot_results": [],
+  "player_delta": {
+    "u_1": 180,
+    "agent_1": -80
+  }
+}
+```
+
+---
+
+## 16. 存储设计
+
+## 16.1 MVP 存储策略
+
+建议：
+
+- 房间实时状态：内存
+- 持久化：MySQL / Postgres
+- 缓存与分发：Redis（可选）
+
+## 16.2 表设计建议
+
+### rooms
+
+- room_id
+- table_id
+- status
+- max_players
+- sb
+- bb
+- ante
+- created_at
+
+### room_players
+
+- room_id
+- player_id
+- seat
+- type
+- chips
+- status
+
+### hands
+
+- hand_id
+- room_id
+- hand_no
+- dealer_seat
+- sb_seat
+- bb_seat
+- board
+- started_at
+- ended_at
+- result_json
+
+### hand_actions
+
+- id
+- hand_id
+- action_no
+- street
+- player_id
+- action
+- amount
+- created_at
+
+### hand_players
+
+- hand_id
+- player_id
+- seat
+- hole_cards_encrypted
+- chips_before
+- chips_after
+- status_end
+- hand_rank_json
+
+---
+
+## 16.3 敏感信息处理
+
+若存在回放与观战：
+
+- 正在进行中的手牌，不能向非本人泄露 hole cards
+- 结算前只给玩家本人私有手牌
+- showdown 后才能广播亮牌信息
+- 持久化可对 hole cards 加密存储
+
+---
+
+## 17. 并发与一致性设计
+
+## 17.1 核心原则
+
+- 单 room 串行
+- 所有动作带 handId 校验
+- 所有动作带 playerId 身份校验
+- 所有状态广播使用单调递增版本号
+
+### 版本号结构建议
+
+```ts
+interface VersionedState {
+  stateVersion: number;
+  handVersion: number;
+}
+```
+
+前端收到旧版本更新时直接丢弃。
+
+---
+
+## 17.2 幂等处理
+
+对于客户端重复发送动作：
+
+- 请求应带 `actionId`
+- 服务端可记录最近已处理 actionId
+- 同一 hand 同一 player 同一 actionId 重复请求直接返回最后结果
+
+---
+
+## 18. 日志与可观测性
+
+## 18.1 推荐日志字段
+
+每条核心日志都建议带：
+
+- room_id
+- hand_id
+- hand_no
+- player_id
+- seat
+- street
+- phase
+- action
+- amount
+- acting_seat
+- state_version
+
+## 18.2 指标建议
+
+### 房间指标
+
+- active_rooms
+- running_hands
+- avg_hand_duration_ms
+- avg_actions_per_hand
+
+### 动作指标
+
+- action_count_total
+- invalid_action_count
+- timeout_action_count
+- agent_action_latency_ms
+
+### 结算指标
+
+- showdown_count
+- sidepot_count
+- splitpot_count
+
+---
+
+## 19. 异常与容错
+
+## 19.1 非法动作
+
+服务端返回：
+
+```json
+{
+  "code": "INVALID_ACTION",
+  "message": "raise amount below min raise"
+}
+```
+
+并保持状态不变。
+
+## 19.2 玩家断线
+
+建议策略：
+
+- 保留座位
+- 到其行动时开始倒计时
+- 超时自动执行 check/fold
+
+## 19.3 Agent 崩溃
+
+建议：
+
+- 捕获异常
+- 记录 agent failure
+- 自动兜底为 check/fold
+- 不影响房间继续进行
+
+## 19.4 服务重启
+
+MVP 可接受房间中断；
+后续版本可增加：
+
+- 房间快照持久化
+- 从 snapshot 恢复 room actor
+
+---
+
+## 20. 安全设计
+
+需要注意：
+
+- 客户端不能提交最终结算结果，只能提交动作意图
+- 服务端不能信任客户端上传的 allowed_actions / pot / turn
+- 所有规则由服务端独立判断
+- 玩家身份需要鉴权
+- 观战者与玩家的可见信息要隔离
+
+---
+
+## 21. 目录结构建议
+
+如果用 Go 开发，推荐：
+
+```text
+/backend
+  /cmd
+    /server
+      main.go
+  /internal
+    /room
+      manager.go
+      actor.go
+      command.go
+    /game
+      engine.go
+      state.go
+      actions.go
+      transition.go
+      settlement.go
+      blinds.go
+      evaluator.go
+      pots.go
+    /agent
+      adapter.go
+      runtime.go
+      prompt.go
+    /transport
+      /http
+        room_handler.go
+      /ws
+        hub.go
+        room_ws.go
+    /store
+      room_repo.go
+      hand_repo.go
+    /model
+      room.go
+      hand.go
+      player.go
+    /infra
+      logger.go
+      metrics.go
+      clock.go
+      idgen.go
+  /pkg
+    /cards
+      deck.go
+      card.go
+    /handeval
+      rank.go
+  go.mod
+```
+
+如果用 Node/TypeScript：
+
+```text
+/src
+  /room
+  /game
+  /agent
+  /api
+  /ws
+  /store
+  /types
+  /utils
+```
+
+---
+
+## 22. 核心接口定义
+
+## 22.1 Engine 接口
+
+```ts
+export interface GameEngine {
+  startHand(room: RoomState): HandState;
+  applyAction(hand: HandState, playerId: string, action: ActionRequest): ApplyActionResult;
+  getAllowedActions(hand: HandState, playerId: string): AllowedAction[];
+  isBettingRoundComplete(hand: HandState): boolean;
+  advanceStreet(hand: HandState): HandState;
+  buildSidePots(hand: HandState): Pot[];
+  settle(hand: HandState): SettlementResult;
+}
+```
+
+## 22.2 Room Actor 接口
+
+```ts
+export interface RoomActor {
+  handle(cmd: RoomCommand): Promise<void>;
+  snapshot(): RoomState;
+}
+```
+
+## 22.3 Agent Runtime 接口
+
+```ts
+export interface AgentRuntime {
+  requestAction(input: AgentActionInput, timeoutMs: number): Promise<AgentActionOutput>;
+}
+```
+
+---
+
+## 23. 测试设计
+
+## 23.1 单元测试
+
+重点必须覆盖：
+
+### 发牌与状态初始化
+
+- 按人数正确发两张底牌
+- 按钮位/盲注位正确
+- actingSeat 正确
+
+### 合法动作
+
+- check 条件
+- call 金额
+- raise 最小加注
+- all-in 不完整加注
+- folded / allin 玩家不能行动
+
+### 轮次推进
+
+- preflop -> flop
+- flop -> turn
+- turn -> river
+- river -> showdown
+
+### 提前结束
+
+- 只剩一人未弃牌
+- 所有人 all-in 自动补牌
+
+### 边池
+
+- 2 人 all-in
+- 3 人不同筹码 all-in
+- 有 folded 玩家参与下注但不可争夺 pot
+- split pot 平分
+
+### 牌型判断
+
+- 所有牌型至少 1 例
+- 同牌型比较至少 3 例
+- wheel straight A2345
+- board plays
+- kicker 决胜
+
+---
+
+## 23.2 集成测试
+
+建议至少准备以下场景：
+
+1. 正常一手牌到 river showdown
+2. preflop 全弃牌到只剩一人
+3. turn 多人 all-in + side pot
+4. 真人与 Agent 混合对局
+5. Agent 超时自动 fold/check
+6. WebSocket 广播顺序正确
+
+---
+
+## 23.3 回归测试数据集
+
+建议沉淀 JSON 测例：
+
+```json
+{
+  "name": "three_way_allin_sidepot",
+  "initial_state": {},
+  "actions": [],
+  "expected": {
+    "pots": [],
+    "winner": [],
+    "chips_after": {}
+  }
+}
+```
+
+这样后续改规则时能快速回归。
+
+---
+
+## 24. 开发优先级建议
+
+## Phase 1：规则内核
+
+先完成：
+
+1. Card / Deck
+2. PlayerState / HandState
+3. startHand
+4. applyAction
+5. bettingRoundComplete
+6. advanceStreet
+7. evaluator
+8. settlement / side pots
+
+目标：在本地单元测试里完成完整手牌模拟。
+
+## Phase 2：房间编排
+
+1. RoomActor
+2. join / leave / start
+3. next hand
+4. action command
+5. state broadcast mock
+
+目标：单房间可连续运行多手牌。
+
+## Phase 3：接入前端
+
+1. HTTP API
+2. WebSocket room channel
+3. snapshot / update / action event
+
+## Phase 4：接入 Agent
+
+1. AgentRuntime
+2. timeout
+3. fallback action
+4. Agent 输入输出协议
+
+## Phase 5：持久化与回放
+
+1. hand summary
+2. action log
+3. replay API
+
+---
+
+## 25. MVP 里程碑
+
+### Milestone 1：规则可跑通
+
+验收标准：
+
+- CLI 模拟一手牌完整结束
+- 能输出动作日志与赢家
+
+### Milestone 2：房间可多人对战
+
+验收标准：
+
+- 2~6 人可在同一房间持续多手对战
+- 出牌顺序和结算正确
+
+### Milestone 3：前端可实时观战
+
+验收标准：
+
+- WebSocket 实时同步牌桌状态
+- 能看到公共牌、底池、行动顺序、日志
+
+### Milestone 4：Agent 可接入
+
+验收标准：
+
+- 至少 1 个 Agent 能自动参与对局
+- 超时不阻塞房间
+
+---
+
+## 26. 关键实现建议
+
+### 26.1 不要一开始就把所有逻辑写进 HTTP Handler
+
+HTTP / WS handler 只做：
+
+- 参数解析
+- 鉴权
+- 调用 room actor
+- 返回结果
+
+核心规则必须在 game engine 中。
+
+### 26.2 不要把前端状态当真相
+
+服务端才是真正权威状态源。
+
+### 26.3 不要让 Agent 直接调用引擎内部方法
+
+Agent 只能通过标准 action 接口提交动作。
+
+### 26.4 先做串行正确，再做性能优化
+
+德州房间的瓶颈通常不是规则计算，而是：
+
+- Agent 思考
+- 网络同步
+- 日志与存储
+
+所以先确保正确性。
+
+---
+
+## 27. 推荐开发语言
+
+### Go
+适合你当前需求，原因：
+
+- 并发模型适合房间 actor
+- WebSocket / HTTP 成熟
+- 部署简单
+- 性能稳定
+- 适合做实时状态服务
+
+### TypeScript / Node
+适合快速联调前端，原因：
+
+- 与前端共享类型方便
+- 原型速度快
+
+如果你的目标是 **长期做 Agent 德州竞技场后端**，推荐：
+
+- **后端主服务用 Go**
+- Agent 编排可单独用 Python/Node
+
+---
+
+## 28. 示例：单房间主循环
+
+Go 风格伪代码：
+
+```go
+func (r *RoomActor) loop() {
+    for cmd := range r.commandCh {
+        switch cmd.Type {
+        case CmdJoin:
+            r.handleJoin(cmd)
+        case CmdStart:
+            r.handleStart(cmd)
+        case CmdPlayerAction:
+            r.handlePlayerAction(cmd)
+        case CmdAgentTimeout:
+            r.handleAgentTimeout(cmd)
+        case CmdNextHand:
+            r.handleNextHand(cmd)
+        }
+    }
+}
+```
+
+```go
+func (r *RoomActor) handlePlayerAction(cmd PlayerActionCommand) {
+    hand := r.state.CurrentHand
+    result, err := r.engine.ApplyAction(hand, cmd.PlayerID, cmd.Action)
+    if err != nil {
+        r.pushError(cmd.PlayerID, err)
+        return
+    }
+
+    r.state.CurrentHand = result.Hand
+    r.broadcastAction(result)
+
+    if result.HandFinished {
+        r.finishHand()
+        return
+    }
+
+    if result.ShouldRequestAgent {
+        r.requestAgentAction(result.NextAgentPlayerID)
+    }
+}
+```
+
+---
+
+## 29. 后续可扩展方向
+
+后续版本可继续加：
+
+1. 锦标赛模式
+2. 多房间匹配
+3. Elo / 排行榜
+4. 手牌回放器
+5. AI 对战批量评测
+6. Monte Carlo 胜率估算
+7. GTO 建议面板
+8. 训练模式（指定牌面/局面）
+9. 观战聊天室
+10. 作弊检测
+
+---
+
+## 30. 最终建议
+
+如果你要做的是一个真实可演进的 Agent 德州竞技场后端，最推荐的落地路径是：
+
+### 第一步
+先把 **Game Engine 规则内核** 做干净：
+
+- 状态机
+- 合法动作
+- 轮次推进
+- 牌型判断
+- 边池结算
+
+### 第二步
+再做 **Room Actor 串行编排**：
+
+- 单房间顺序执行
+- WebSocket 广播
+- 自动下一手
+
+### 第三步
+最后接 **Agent Runtime**：
+
+- 结构化输入
+- 超时保护
+- 非法动作兜底
+
+这样整体架构会非常稳，后续无论你是做：
+
+- Agent vs Agent
+- 人机对战
+- 批量策略评估
+- 直播观战竞技场
+
+都能复用这套后端底座。
+
+---
+
+## 31. 附录：建议先实现的最小函数清单
+
+### game/state
+
+- `newHandState()`
+- `cloneState()`
+- `getPlayerById()`
+- `getPlayerBySeat()`
+- `activePlayers()`
+- `livePlayers()`
+
+### game/deck
+
+- `newDeck()`
+- `shuffle()`
+- `draw(n)`
+
+### game/blinds
+
+- `rotateDealer()`
+- `assignBlinds()`
+- `postBlinds()`
+
+### game/actions
+
+- `getAllowedActions()`
+- `validateAction()`
+- `applyFold()`
+- `applyCheck()`
+- `applyCall()`
+- `applyBet()`
+- `applyRaise()`
+- `applyAllIn()`
+
+### game/transition
+
+- `isBettingRoundComplete()`
+- `findNextActingSeat()`
+- `advanceStreet()`
+- `shouldRunShowdown()`
+- `shouldEndHandImmediately()`
+
+### game/settlement
+
+- `buildSidePots()`
+- `evaluateRemainingPlayers()`
+- `settlePots()`
+- `applySettlement()`
+
+### room
+
+- `handleJoin()`
+- `handleLeave()`
+- `handleStart()`
+- `handlePlayerAction()`
+- `handleNextHand()`
+- `broadcastSnapshot()`
+- `broadcastAction()`
+- `broadcastSettlement()`
+
+---
+
+这份文档可以直接作为后端开发的 v1 设计基线。若继续往下落地，下一步最合适的是先补两份配套文档：
+
+1. **状态机时序图文档**
+2. **Go 版本接口与代码骨架文档**
+
