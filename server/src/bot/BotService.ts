@@ -1,5 +1,6 @@
 import { Player, GameState } from '../types';
-import fetch from 'node-fetch';
+
+// Node.js 18+ has built-in fetch
 
 export class BotService {
   async getDecision(
