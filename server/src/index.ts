@@ -15,7 +15,7 @@ import { GameOrchestrator } from './orchestrator/GameOrchestrator';
 installConsoleFileLogging();
 
 const app = express();
-const PORT = Number(process.env.PORT) || 8080;
+const PORT = Number(process.env.PORT) || 3000;
 const dev = process.env.NODE_ENV !== 'production';
 const projectRoot = path.resolve(__dirname, '..', '..');
 const nextApp = next({ dev, dir: projectRoot });

@@ -3,8 +3,8 @@ requires = ["nodejs-24"]
 
 [dev]
 build = ["pnpm", "install"]
-run = ["cd", "server", "&&", "PORT=8080", "pnpm", "dev"]
+run = ["cd", "server", "&&", "PORT=3000", "pnpm", "dev"]
 
 [deploy]
 build = ["pnpm", "install"]
-run = ["cd", "server", "&&", "PORT=8080", "pnpm", "dev"]
+run = ["cd", "server", "&&", "PORT=3000", "pnpm", "dev"]
