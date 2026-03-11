@@ -342,10 +342,6 @@ export class WebSocketHandler {
     }
   }
 
-  private handleClientDisconnect(clientId: string): void {
-    this.clients.delete(clientId);
-  }
-
   private generateClientId(): string {
     return `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   }
