@@ -670,6 +670,13 @@ export default function TexasHoldem() {
 
     ws.onmessage = (event) => {
       try {
+        // 处理 ping 消息
+        if (event.data === 'ping') {
+          debugLog('ws ping received, sending pong');
+          ws.send('pong');
+          return;
+        }
+
         const message = JSON.parse(event.data);
         debugLog('ws message', { type: message.type, keys: message.data ? Object.keys(message.data) : undefined });
         if (message.type === 'connected') {
@@ -708,10 +715,9 @@ export default function TexasHoldem() {
     if (!gameState?.gameId) return;
 
     // 初始连接
-    const cleanup = connectWebSocket();
+    connectWebSocket();
 
     return () => {
-      cleanup?.();
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;

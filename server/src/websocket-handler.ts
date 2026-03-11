@@ -15,10 +15,18 @@ type WebSocketHandlerOptions =
   | { port: number }
   | { server: HttpServer; path?: string };
 
+interface WSClientWithTimers extends WSClient {
+  heartbeatTimer?: NodeJS.Timeout;
+  pingTimeout?: NodeJS.Timeout;
+  lastActivity?: number;
+}
+
 export class WebSocketHandler {
   private wss: WebSocketServer;
-  private clients: Map<string, WSClient> = new Map();
+  private clients: Map<string, WSClientWithTimers> = new Map();
   private games: Map<string, GameEngine> = new Map();
+  private readonly HEARTBEAT_INTERVAL = 25000; // 25秒
+  private readonly PING_TIMEOUT = 10000; // 10秒超时
 
   constructor(options: WebSocketHandlerOptions) {
     if ('port' in options) {
@@ -53,9 +61,10 @@ export class WebSocketHandler {
   private setupServer(): void {
     this.wss.on('connection', (ws: WebSocket) => {
       const clientId = this.generateClientId();
-      const client: WSClient = {
+      const client: WSClientWithTimers = {
         id: clientId,
         ws,
+        lastActivity: Date.now(),
       };
 
       this.clients.set(clientId, client);
@@ -69,8 +78,23 @@ export class WebSocketHandler {
         timestamp: Date.now(),
       });
 
+      // 启动心跳
+      this.startHeartbeat(clientId);
+
       ws.on('message', (data: string) => {
         try {
+          client.lastActivity = Date.now();
+          
+          // 处理 pong 响应
+          if (data === 'pong') {
+            debugLog('client:pong', { clientId });
+            if (client.pingTimeout) {
+              clearTimeout(client.pingTimeout);
+              client.pingTimeout = undefined;
+            }
+            return;
+          }
+
           debugLog('client:message', { clientId, bytes: data.length });
           const message = JSON.parse(data) as WSMessage;
           this.handleMessage(clientId, message);
@@ -94,6 +118,65 @@ export class WebSocketHandler {
         console.error(`WebSocket error for client ${clientId}:`, error);
       });
     });
+  }
+
+  private startHeartbeat(clientId: string): void {
+    const client = this.clients.get(clientId);
+    if (!client) return;
+
+    // 清除之前的定时器
+    if (client.heartbeatTimer) {
+      clearInterval(client.heartbeatTimer);
+    }
+    if (client.pingTimeout) {
+      clearTimeout(client.pingTimeout);
+    }
+
+    // 定期发送 ping
+    client.heartbeatTimer = setInterval(() => {
+      const c = this.clients.get(clientId);
+      if (!c || c.ws.readyState !== WebSocket.OPEN) {
+        this.stopHeartbeat(clientId);
+        return;
+      }
+
+      try {
+        debugLog('server:ping', { clientId });
+        c.ws.send('ping');
+
+        // 设置超时
+        c.pingTimeout = setTimeout(() => {
+          console.warn(`Client ${clientId} heartbeat timeout, closing connection`);
+          this.handleClientDisconnect(clientId);
+        }, this.PING_TIMEOUT);
+      } catch (error) {
+        console.error(`Failed to send ping to client ${clientId}:`, error);
+        this.handleClientDisconnect(clientId);
+      }
+    }, this.HEARTBEAT_INTERVAL);
+  }
+
+  private stopHeartbeat(clientId: string): void {
+    const client = this.clients.get(clientId);
+    if (!client) return;
+
+    if (client.heartbeatTimer) {
+      clearInterval(client.heartbeatTimer);
+      client.heartbeatTimer = undefined;
+    }
+    if (client.pingTimeout) {
+      clearTimeout(client.pingTimeout);
+      client.pingTimeout = undefined;
+    }
+  }
+
+  private handleClientDisconnect(clientId: string): void {
+    this.stopHeartbeat(clientId);
+    const client = this.clients.get(clientId);
+    if (client && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.close();
+    }
+    this.clients.delete(clientId);
   }
 
   private handleMessage(clientId: string, message: WSMessage): void {
