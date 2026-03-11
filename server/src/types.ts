@@ -40,7 +40,6 @@ export interface GameState {
   dealerIndex: number;
   smallBlindIndex: number;
   bigBlindIndex: number;
-  timeRemaining: number;
   showdownRevealed?: boolean;
   resultReady?: boolean;
   winners?: Player[]; // 结算阶段的获胜者

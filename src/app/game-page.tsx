@@ -43,7 +43,6 @@ interface GameState {
   dealerIndex: number;
   smallBlindIndex: number;
   bigBlindIndex: number;
-  timeRemaining: number;
   showdownRevealed?: boolean;
   resultReady?: boolean;
   winners?: Player[];
@@ -259,7 +258,6 @@ export default function TexasHoldem() {
       typeof v.dealerIndex === 'number' &&
       typeof v.smallBlindIndex === 'number' &&
       typeof v.bigBlindIndex === 'number' &&
-      typeof v.timeRemaining === 'number' &&
       typeof v.settings === 'object' &&
       v.settings !== null
     );
@@ -295,8 +293,7 @@ export default function TexasHoldem() {
         prev.phase !== nextState.phase ||
         prev.currentPlayerIndex !== nextState.currentPlayerIndex ||
         prev.pot !== nextState.pot ||
-        prev.currentBet !== nextState.currentBet ||
-        prev.timeRemaining !== nextState.timeRemaining
+        prev.currentBet !== nextState.currentBet
       ) {
         debugLog('state', {
           gameId: nextState.gameId,
@@ -307,7 +304,6 @@ export default function TexasHoldem() {
           pot: `${prev.pot} -> ${nextState.pot}`,
           currentBet: `${prev.currentBet} -> ${nextState.currentBet}`,
           currentPlayerIndex: `${prev.currentPlayerIndex} -> ${nextState.currentPlayerIndex}`,
-          timeRemaining: nextState.timeRemaining,
         });
       }
     } else {

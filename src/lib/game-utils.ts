@@ -32,7 +32,6 @@ export interface GameState {
   dealerIndex: number;
   smallBlindIndex: number;
   bigBlindIndex: number;
-  timeRemaining: number;
   settings: {
     smallBlind: number;
     bigBlind: number;
@@ -211,7 +210,6 @@ export function createInitialGameState(
     dealerIndex,
     smallBlindIndex: (dealerIndex + 1) % playerCount,
     bigBlindIndex: (dealerIndex + 2) % playerCount,
-    timeRemaining: settings.timeLimit,
     settings,
   };
 

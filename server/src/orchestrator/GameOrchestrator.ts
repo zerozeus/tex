@@ -15,7 +15,6 @@ function summarizeState(state: GameState): Record<string, unknown> {
     currentBet: state.currentBet,
     minRaise: state.minRaise,
     currentPlayerIndex: state.currentPlayerIndex,
-    timeRemaining: state.timeRemaining,
     resultReady: state.resultReady,
     winners: state.winners?.map(w => w.id),
     players: state.players.map(p => ({

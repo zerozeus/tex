@@ -195,7 +195,6 @@ export class GameEngine {
       dealerIndex,
       smallBlindIndex,
       bigBlindIndex,
-      timeRemaining: config.timeLimit,
       showdownRevealed: false,
       resultReady: false,
       settings: {
@@ -698,7 +697,6 @@ export class GameEngine {
       this.gameState.players.forEach((player, index) => {
         player.isCurrent = index === nextIndex;
       });
-      this.gameState.timeRemaining = this.gameState.settings.timeLimit;
     }
     console.log("[next player]", {
       phase: this.gameState.phase,
@@ -842,7 +840,6 @@ export class GameEngine {
         this.gameState.phase = "showdown";
         this.gameState.showdownRevealed = true;
         this.gameState.resultReady = false;
-        this.gameState.timeRemaining = 0;
         return;
       case "showdown": // Should not happen but safety check
       case "completed":
@@ -876,7 +873,6 @@ export class GameEngine {
     if (nextRounds < playerCount) {
       this.gameState.currentPlayerIndex = nextIndex;
       this.gameState.players[nextIndex].isCurrent = true;
-      this.gameState.timeRemaining = this.gameState.settings.timeLimit;
       console.log(`[moveToNextPhase] First player for ${this.gameState.phase}: ${this.gameState.players[nextIndex].name} (Index ${nextIndex})`);
     } else {
       // 没有任何玩家可以行动（所有人要么弃牌，要么全押）
@@ -1537,12 +1533,6 @@ export class GameEngine {
       counts[card.value] = (counts[card.value] || 0) + 1;
     });
     return counts;
-  }
-
-  public decreaseTime(): void {
-    if (this.gameState.timeRemaining > 0) {
-      this.gameState.timeRemaining--;
-    }
   }
 
   public getRemainingDeck(): Card[] {
