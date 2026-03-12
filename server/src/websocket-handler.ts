@@ -25,8 +25,8 @@ export class WebSocketHandler {
   private wss: WebSocketServer;
   private clients: Map<string, WSClientWithTimers> = new Map();
   private games: Map<string, GameEngine> = new Map();
-  private readonly HEARTBEAT_INTERVAL = 45000; // 45秒
-  private readonly PING_TIMEOUT = 20000; // 20秒超时
+  private readonly HEARTBEAT_INTERVAL = 30000; // 30秒
+  private readonly PING_TIMEOUT = 60000; // 60秒超时
 
   constructor(options: WebSocketHandlerOptions) {
     if ('port' in options) {
@@ -81,13 +81,15 @@ export class WebSocketHandler {
       // 启动心跳
       this.startHeartbeat(clientId);
 
-      ws.on('message', (data: string) => {
+      ws.on('message', (rawData: unknown) => {
+        const data = String(rawData);
         try {
           client.lastActivity = Date.now();
           
           // 处理 pong 响应
           if (data === 'pong') {
             debugLog('client:pong', { clientId });
+            // 收到 pong，清除超时计时器
             if (client.pingTimeout) {
               clearTimeout(client.pingTimeout);
               client.pingTimeout = undefined;
