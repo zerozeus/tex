@@ -19,6 +19,10 @@ export interface Player {
   isDealer: boolean;
   isCurrent: boolean;
   isAllIn: boolean;
+  isBot?: boolean;
+  botToken?: string;
+  botId?: string;
+  apiUrl?: string;
 }
 
 export interface GameState {
@@ -98,7 +102,7 @@ export function dealCards(deck: Card[], playerCount: number): { cards: Card[][];
  * 初始化玩家状态
  */
 export function initializePlayers(
-  playerConfigs: Array<{ id: number; name: string; chips: number }>,
+  playerConfigs: Array<{ id: number; name: string; chips: number; isBot?: boolean; botToken?: string; botId?: string; apiUrl?: string }>,
   dealerIndex: number
 ): Player[] {
   return playerConfigs.map((config, index) => ({
@@ -174,7 +178,7 @@ export function collectBlinds(
  * 创建初始游戏状态
  */
 export function createInitialGameState(
-  playerConfigs: Array<{ id: number; name: string; chips: number }>,
+  playerConfigs: Array<{ id: number; name: string; chips: number; isBot?: boolean; botToken?: string; botId?: string; apiUrl?: string }>,
   settings: { smallBlind: number; bigBlind: number; timeLimit: number }
 ): GameState {
   const gameId = `game-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;

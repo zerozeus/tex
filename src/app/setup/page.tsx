@@ -1,15 +1,29 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Slider } from '@/components/ui/slider';
-import { User, Play, ArrowLeft, Bot } from 'lucide-react';
+import { User, Play, ArrowLeft, Bot, Check, ChevronsUpDown } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { gameApiClient } from '@/lib/api-client';
+import { gameApiClient, type BotTemplate } from '@/lib/api-client';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
 
 interface PlayerConfig {
   id: number;
@@ -17,6 +31,51 @@ interface PlayerConfig {
   isBot: boolean;
   botToken?: string;
   botId?: string;
+  apiUrl?: string;
+}
+
+const DEFAULT_BOT_ID = '7615209749759426602';
+const DEFAULT_BOT_API_URL = 'https://rz2qynsv9r.coze.site/stream_run';
+
+function getHostFromUrl(url?: string): string {
+  if (!url) return '-';
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+function matchBotTemplate(player: PlayerConfig, bot: BotTemplate): boolean {
+  const byToken = Boolean(player.botToken) && bot.token === player.botToken;
+  const byConfig = Boolean(player.botId && player.apiUrl) && bot.botId === player.botId && bot.url === player.apiUrl;
+  return byToken || byConfig;
+}
+
+function applyDefaultBots(players: PlayerConfig[], botTemplates: BotTemplate[]): PlayerConfig[] {
+  if (!botTemplates.length) return players;
+  let botIndex = 0;
+
+  return players.map((player) => {
+    if (!player.isBot) return player;
+
+    const template = botTemplates[botIndex % botTemplates.length];
+    botIndex += 1;
+
+    if (player.botToken?.trim()) {
+      return player;
+    }
+
+    const shouldUseTemplateName = !player.name.trim() || player.name.trim().startsWith('机器人');
+
+    return {
+      ...player,
+      name: shouldUseTemplateName ? template.name : player.name,
+      botToken: template.token ?? '',
+      botId: template.botId,
+      apiUrl: template.url,
+    };
+  });
 }
 
 export default function GameSetup() {
@@ -24,8 +83,8 @@ export default function GameSetup() {
   const [playerCount, setPlayerCount] = useState(3);
   const [players, setPlayers] = useState<PlayerConfig[]>([
     { id: 1, name: '玩家 1', isBot: false },
-    { id: 2, name: '机器人 Alice', isBot: true, botToken: '', botId: '7615209749759426602' },
-    { id: 3, name: '机器人 Bob', isBot: true, botToken: '', botId: '7615209749759426602' },
+    { id: 2, name: '机器人 Alice', isBot: true, botToken: '', botId: '7615209749759426602', apiUrl: 'https://rz2qynsv9r.coze.site/stream_run' },
+    { id: 3, name: '机器人 Bob', isBot: true, botToken: '', botId: '7615209749759426602', apiUrl: 'https://rz2qynsv9r.coze.site/stream_run' },
   ]);
   const [initialChips, setInitialChips] = useState(1000);
   const [smallBlind, setSmallBlind] = useState(10);
@@ -33,6 +92,24 @@ export default function GameSetup() {
   const [timeLimit, setTimeLimit] = useState(30);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [availableBots, setAvailableBots] = useState<BotTemplate[]>([]);
+  const [advancedBotPlayers, setAdvancedBotPlayers] = useState<Record<number, boolean>>({});
+
+  useEffect(() => {
+    // 获取可用机器人列表
+    const fetchBots = async () => {
+      try {
+        const result = await gameApiClient.getBots();
+        if (result.success && Array.isArray(result.data)) {
+          setAvailableBots(result.data);
+          setPlayers((prev) => applyDefaultBots(prev, result.data ?? []));
+        }
+      } catch (error) {
+        console.error('Failed to fetch bots:', error);
+      }
+    };
+    fetchBots();
+  }, []);
 
   // 更新玩家数量
   const handlePlayerCountChange = (value: number) => {
@@ -43,13 +120,18 @@ export default function GameSetup() {
     if (newCount > players.length) {
       // 添加新玩家（默认为机器人）
       const newPlayers = [...players];
+      let botIndex = players.filter((p) => p.isBot).length;
       for (let i = players.length; i < newCount; i++) {
+        const template = availableBots[botIndex % availableBots.length];
+        botIndex += 1;
+
         newPlayers.push({
           id: i + 1,
-          name: `机器人 ${String.fromCharCode(65 + i)}`,
+          name: template ? template.name : `机器人 ${String.fromCharCode(65 + i)}`,
           isBot: true,
-          botToken: '',
-          botId: '7615209749759426602',
+          botToken: template?.token || '',
+          botId: template?.botId || DEFAULT_BOT_ID,
+          apiUrl: template?.url || DEFAULT_BOT_API_URL,
         });
       }
       setPlayers(newPlayers);
@@ -68,6 +150,13 @@ export default function GameSetup() {
   // 更新玩家配置
   const updatePlayerConfig = (playerId: number, updates: Partial<PlayerConfig>) => {
     setPlayers(players.map(p => p.id === playerId ? { ...p, ...updates } : p));
+  };
+
+  const toggleAdvancedBotConfig = (playerId: number) => {
+    setAdvancedBotPlayers((prev) => ({
+      ...prev,
+      [playerId]: !prev[playerId],
+    }));
   };
 
   // 验证设置
@@ -134,6 +223,7 @@ export default function GameSetup() {
           isBot: p.isBot,
           botToken: p.botToken,
           botId: p.botId,
+          apiUrl: p.apiUrl,
         })),
         smallBlind,
         bigBlind,
@@ -281,62 +371,143 @@ export default function GameSetup() {
           <Card className="p-6 bg-white/10 border-white/20">
             <h2 className="text-xl font-semibold text-white mb-4">玩家配置</h2>
             <div className="space-y-4">
-              {players.map((player) => (
-                <Card key={player.id} className={`p-4 ${player.isBot ? 'bg-purple-500/10 border-purple-500/30' : 'bg-blue-500/10 border-blue-500/30'}`}>
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <Badge variant={player.isBot ? "default" : "secondary"} className={player.isBot ? "bg-purple-500" : "bg-blue-500"}>
-                        {player.isBot ? <Bot className="w-3 h-3 mr-1" /> : <User className="w-3 h-3 mr-1" />}
-                        {player.isBot ? '机器人' : '真人'}
-                      </Badge>
-                      <span className="text-white font-medium">玩家 {player.id}</span>
-                    </div>
-                  </div>
+              {players.map((player) => {
+                const selectedBot = availableBots.find((bot) => matchBotTemplate(player, bot));
+                const advancedOpen = Boolean(advancedBotPlayers[player.id]);
 
-                  {/* 玩家名称 */}
-                  <div className="mb-3">
-                    <Label className="text-gray-300 text-sm mb-1 block">名称</Label>
-                    <Input
-                      value={player.name}
-                      onChange={(e) => updatePlayerConfig(player.id, { name: e.target.value })}
-                      className="bg-white/10 border-white/20 text-white"
-                      placeholder="输入玩家名称"
-                    />
-                  </div>
-
-                  {/* 机器人专属配置 */}
-                  {player.isBot && (
-                    <div className="space-y-3 pt-3 border-t border-white/10">
-                      <div>
-                        <Label className="text-gray-300 text-sm mb-1 block">API Token (必填)</Label>
-                        <Input
-                          type="password"
-                          value={player.botToken || ''}
-                          onChange={(e) => updatePlayerConfig(player.id, { botToken: e.target.value })}
-                          className="bg-white/10 border-white/20 text-white"
-                          placeholder="输入 Coze API Token"
-                        />
-                        <p className="text-xs text-gray-400 mt-1">
-                          在 Coze 平台获取个人访问令牌 (PAT)
-                        </p>
-                      </div>
-
-                      <div>
-                        <Label className="text-gray-300 text-sm mb-1 block">Project ID (必填)</Label>
-                        <Input
-                          value={player.botId || ''}
-                          onChange={(e) => updatePlayerConfig(player.id, { botId: e.target.value })}
-                          className="bg-white/10 border-white/20 text-white"
-                          placeholder="输入 Coze Project ID"
-                        />
-                        <p className="text-xs text-gray-400 mt-1">
-                          例如: 7615209749759426602
-                        </p>
+                return (
+                  <Card key={player.id} className={`p-4 ${player.isBot ? 'bg-purple-500/10 border-purple-500/30' : 'bg-blue-500/10 border-blue-500/30'}`}>
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Badge variant={player.isBot ? 'default' : 'secondary'} className={player.isBot ? 'bg-purple-500' : 'bg-blue-500'}>
+                          {player.isBot ? <Bot className="w-3 h-3 mr-1" /> : <User className="w-3 h-3 mr-1" />}
+                          {player.isBot ? '机器人' : '真人'}
+                        </Badge>
+                        <span className="text-white font-medium">玩家 {player.id}</span>
                       </div>
                     </div>
-                  )}
-                </Card>
-              ))}
+
+                    {/* 玩家名称 */}
+                    <div className="mb-3">
+                      <Label className="text-gray-300 text-sm mb-1 block">名称</Label>
+                      <Input
+                        value={player.name}
+                        onChange={(e) => updatePlayerConfig(player.id, { name: e.target.value })}
+                        className="bg-white/10 border-white/20 text-white"
+                        placeholder="输入玩家名称"
+                      />
+                    </div>
+
+                    {/* 机器人专属配置 */}
+                    {player.isBot && (
+                      <div className="space-y-3 pt-3 border-t border-white/10">
+                        <div className="flex flex-col space-y-2">
+                          <Label className="text-gray-300 text-sm">选择预设机器人</Label>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button
+                                variant="outline"
+                                role="combobox"
+                                className="w-full justify-between bg-white/10 border-white/20 text-white hover:bg-white/20 hover:text-white"
+                              >
+                                {selectedBot ? selectedBot.name : '选择机器人模板...'}
+                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[300px] p-0 bg-slate-800 border-slate-700">
+                              <Command className="bg-slate-800 text-white">
+                                <CommandInput placeholder="搜索机器人..." className="h-9 text-white" />
+                                <CommandList>
+                                  <CommandEmpty>未找到机器人</CommandEmpty>
+                                  <CommandGroup>
+                                    {availableBots.map((bot) => (
+                                    <CommandItem
+                                      key={bot.id}
+                                      value={bot.name}
+                                      onSelect={() => {
+                                          updatePlayerConfig(player.id, {
+                                            name: bot.name,
+                                            botToken: bot.token ?? '',
+                                            botId: bot.botId,
+                                            apiUrl: bot.url,
+                                          });
+                                        }}
+                                        className="text-white hover:bg-slate-700 cursor-pointer"
+                                      >
+                                        <Check
+                                          className={cn(
+                                            'mr-2 h-4 w-4',
+                                            selectedBot?.id === bot.id ? 'opacity-100' : 'opacity-0'
+                                          )}
+                                        />
+                                        {bot.name}
+                                      </CommandItem>
+                                    ))}
+                                  </CommandGroup>
+                                </CommandList>
+                              </Command>
+                            </PopoverContent>
+                          </Popover>
+                        </div>
+
+                        <div className="flex items-center justify-between text-xs text-gray-400">
+                          <span>BotID: {player.botId || '-'}</span>
+                          <span>域名: {getHostFromUrl(player.apiUrl)}</span>
+                        </div>
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          onClick={() => toggleAdvancedBotConfig(player.id)}
+                          className="h-8 px-2 text-gray-300 hover:text-white hover:bg-white/10"
+                        >
+                          {advancedOpen ? '收起高级设置' : '展开高级设置'}
+                        </Button>
+
+                        {advancedOpen && (
+                          <div className="space-y-3 pt-3 border-t border-white/10">
+                            <div>
+                              <Label className="text-gray-300 text-sm mb-1 block">API Token（可选）</Label>
+                              <Input
+                                type="password"
+                                value={player.botToken || ''}
+                                onChange={(e) => updatePlayerConfig(player.id, { botToken: e.target.value })}
+                                className="bg-white/10 border-white/20 text-white"
+                                placeholder="输入 Coze API Token"
+                              />
+                            </div>
+
+                            <div>
+                              <Label className="text-gray-300 text-sm mb-1 block">Bot ID</Label>
+                              <Input
+                                value={player.botId || ''}
+                                onChange={(e) => updatePlayerConfig(player.id, { botId: e.target.value })}
+                                className="bg-white/10 border-white/20 text-white"
+                                placeholder="输入 Coze Bot ID"
+                              />
+                            </div>
+
+                            <div>
+                              <Label className="text-gray-300 text-sm mb-1 block">API URL</Label>
+                              <Input
+                                value={player.apiUrl || ''}
+                                onChange={(e) => updatePlayerConfig(player.id, { apiUrl: e.target.value })}
+                                className="bg-white/10 border-white/20 text-white"
+                                placeholder="https://rz2qynsv9r.coze.site/stream_run"
+                              />
+                            </div>
+
+                            <p className="text-xs text-gray-400">
+                              一般无需修改以上字段；若 Token 为空，机器人将回退到默认策略。
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
             </div>
           </Card>
 

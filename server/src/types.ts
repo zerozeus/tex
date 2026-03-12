@@ -19,6 +19,7 @@ export interface Player {
   isBot: boolean; // 是否是机器人
   botToken?: string; // 机器人的API token
   botId?: string; // Coze Bot ID
+  apiUrl?: string; // 机器人的API URL
   botModel?: string; // 机器人使用的模型ID
   sessionId?: string; // Coze 会话ID
   hasActed?: boolean; // 在当前阶段是否已经行动过
@@ -83,6 +84,7 @@ export interface GameConfig {
     isBot: boolean;
     botToken?: string;
     botId?: string;
+    apiUrl?: string;
     botModel?: string;
   }>;
   smallBlind: number;

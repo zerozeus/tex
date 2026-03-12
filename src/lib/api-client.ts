@@ -21,6 +21,14 @@ export type ApiResult<T = unknown> = {
   message?: string;
 };
 
+export type BotTemplate = {
+  id: string;
+  name: string;
+  token?: string;
+  botId: string;
+  url: string;
+};
+
 const API_DEBUG = process.env.NEXT_PUBLIC_POKER_DEBUG === '1';
 
 function safeStringify(value: unknown, maxLength = 2000): string {
@@ -159,6 +167,15 @@ export class GameApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
     });
+    return result;
+  }
+
+  /**
+   * 获取机器人模板
+   */
+  async getBots(): Promise<ApiResult<BotTemplate[]>> {
+    const url = this.getUrl('/bots');
+    const result = await this.fetchJson<ApiResult<BotTemplate[]>>(url);
     return result;
   }
 

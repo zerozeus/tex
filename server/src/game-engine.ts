@@ -159,6 +159,7 @@ export class GameEngine {
       isBot: playerConfig.isBot || false,
       botToken: playerConfig.botToken,
       botId: playerConfig.botId,
+      apiUrl: playerConfig.apiUrl,
       hasActed: false,
       roundBet: 0,
       totalHandBet: 0,

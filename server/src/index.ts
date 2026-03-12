@@ -6,10 +6,11 @@ import { gameDatabaseService } from './storage/database/game-database.service';
 import { installConsoleFileLogging } from './utils/logger';
 import next from 'next';
 import path from 'path';
-import { createServer } from 'http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 
 import { GameLock } from './infra/GameLock';
 import { BotService } from './bot/BotService';
+import { AVAILABLE_BOTS } from './bot/bots-config';
 import { GameOrchestrator } from './orchestrator/GameOrchestrator';
 
 installConsoleFileLogging();
@@ -19,15 +20,17 @@ const PORT = Number(process.env.PORT) || 3000;
 const dev = process.env.NODE_ENV !== 'production';
 const projectRoot = path.resolve(__dirname, '..', '..');
 let nextApp: ReturnType<typeof next>;
-let nextHandler: (req: any, res: any) => void;
+let nextHandler: (req: IncomingMessage, res: ServerResponse) => void;
 
 try {
   nextApp = next({ dev, dir: projectRoot });
   nextHandler = nextApp.getRequestHandler();
 } catch (e) {
   console.warn('Next.js not available, running in API-only mode');
-  nextHandler = (req, res) => {
-    res.status(404).json({ error: 'Not found' });
+  nextHandler = (_req, res) => {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: 'Not found' }));
   };
 }
 
@@ -109,6 +112,19 @@ const orchestrator = new GameOrchestrator(
 // 健康检查
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
+});
+
+// 获取可用机器人列表
+app.get('/api/bots', (req, res) => {
+  res.json({
+    success: true,
+    data: AVAILABLE_BOTS.map(bot => ({
+      id: bot.id,
+      name: bot.name,
+      botId: bot.botId,
+      url: bot.url
+    }))
+  });
 });
 
 
