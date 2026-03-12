@@ -29,8 +29,27 @@ interface Player {
   isBot: boolean;
 }
 
+interface GameHistoryEvent {
+  sequence: number;
+  handNumber: number;
+  kind: 'hand_start' | 'blind' | 'action' | 'phase_change' | 'hand_end';
+  phase: string;
+  playerId?: string;
+  playerName?: string;
+  blindType?: 'small' | 'big';
+  action?: string;
+  amount?: number;
+  pot?: number;
+  currentBet?: number;
+  playerBet?: number;
+  chipsAfter?: number;
+  communityCards?: string[];
+  note?: string;
+}
+
 interface GameState {
   gameId: string;
+  handNumber?: number;
   phase: 'preflop' | 'flop' | 'turn' | 'river' | 'showdown' | 'completed';
   endType?: 'hand' | 'game';
   pot: number;
@@ -49,6 +68,7 @@ interface GameState {
   winAmount?: number;
   settlementReason?: 'fold' | 'showdown';
   handSummary?: Record<string, { description: string; bestCards: Card[] }>;
+  actionHistory?: GameHistoryEvent[];
   settings: {
     smallBlind: number;
     bigBlind: number;
@@ -80,15 +100,15 @@ export default function TexasHoldem() {
   const previousGameStateRef = useRef<GameState | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const consoleEndRef = useRef<HTMLDivElement>(null);
+  const mobileConsoleEndRef = useRef<HTMLDivElement>(null);
   const handStartChipsRef = useRef<Record<string, number> | null>(null);
   const handStartGameIdRef = useRef<string | null>(null);
 
-  // 自动滚动到底部
-  useEffect(() => {
-    if (showConsole && consoleEndRef.current) {
-      consoleEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }
-  }, [consoleLogs.length, showConsole]);
+  function scrollConsoleToEnd() {
+    if (!showConsole) return;
+    consoleEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    mobileConsoleEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }
 
   // 添加控制台日志
   const addConsoleLog = (type: ConsoleLog['type'], message: string, playerName?: string) => {
@@ -160,10 +180,8 @@ export default function TexasHoldem() {
   };
 
   useEffect(() => {
-    if (showConsole && consoleEndRef.current) {
-      consoleEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }
-  }, [showConsole, winnerInfo?.show, nextRoundInFlight]);
+    scrollConsoleToEnd();
+  }, [consoleLogs.length, showConsole, winnerInfo?.show, nextRoundInFlight]);
 
   function snapshotHandStart(state: GameState): void {
     handStartGameIdRef.current = state.gameId;
@@ -763,11 +781,18 @@ export default function TexasHoldem() {
   };
 
   // 渲染扑克牌
-  const renderCard = (card: Card, hidden: boolean = false) => {
+  const renderCard = (card: Card, hidden: boolean = false, size: 'sm' | 'md' = 'md') => {
+    const sizeClass =
+      size === 'sm'
+        ? 'w-10 h-14 rounded-md border'
+        : 'w-14 h-20 rounded-lg border-2';
+    const rankClass = size === 'sm' ? 'text-sm' : 'text-xl';
+    const suitClass = size === 'sm' ? 'text-lg' : 'text-2xl';
+
     if (hidden) {
       return (
-        <div className="w-14 h-20 bg-gradient-to-br from-blue-600 to-blue-800 rounded-lg shadow-md flex items-center justify-center border-2 border-blue-400">
-          <div className="w-10 h-16 bg-blue-700 rounded"></div>
+        <div className={`${sizeClass} bg-gradient-to-br from-blue-600 to-blue-800 shadow-md flex items-center justify-center border-blue-400`}>
+          <div className={`${size === 'sm' ? 'w-7 h-10 rounded-sm' : 'w-10 h-16 rounded'} bg-blue-700`}></div>
         </div>
       );
     }
@@ -775,11 +800,11 @@ export default function TexasHoldem() {
     const isRed = card.suit === '♥' || card.suit === '♦';
 
     return (
-      <div className="w-14 h-20 bg-white rounded-lg shadow-md flex flex-col items-center justify-center border-2 border-gray-200">
-        <div className={`text-xl font-bold ${isRed ? 'text-red-600' : 'text-gray-900'}`}>
+      <div className={`${sizeClass} bg-white shadow-md flex flex-col items-center justify-center border-gray-200`}>
+        <div className={`${rankClass} font-bold ${isRed ? 'text-red-600' : 'text-gray-900'}`}>
           {card.rank}
         </div>
-        <div className={`text-2xl ${isRed ? 'text-red-600' : 'text-gray-900'}`}>
+        <div className={`${suitClass} ${isRed ? 'text-red-600' : 'text-gray-900'}`}>
           {card.suit}
         </div>
       </div>
@@ -998,65 +1023,40 @@ export default function TexasHoldem() {
   }
 
   function getSeatPositions(seatCount: number): Array<{ leftPct: number; topPct: number }> {
-    // 基础半径设置（百分比）
-    const rx = 42; // 水平半径
-    const ry = 32; // 垂直半径 (减小以避免上下边缘溢出)
+    const layout =
+      seatCount >= 8
+        ? { rx: 42, ry: 34, bottom: 86, top: 13 }
+        : seatCount >= 6
+          ? { rx: 40, ry: 32, bottom: 84, top: 14 }
+          : { rx: 38, ry: 30, bottom: 82, top: 16 };
 
-    // 如果只有2人，直接上下对战
     if (seatCount === 2) {
       return [
-        { leftPct: 50, topPct: 88 }, // 自己（底部） - 贴底
-        { leftPct: 50, topPct: 12 }, // 对手（顶部） - 贴顶
+        { leftPct: 50, topPct: 84 },
+        { leftPct: 50, topPct: 16 },
       ];
     }
 
     return Array.from({ length: seatCount }, (_, seatIndex) => {
-      // 座位 0 固定在底部中心 (270度 / -90度)
-      // 其他座位从底部顺时针分布
-      
-      // 计算角度：底部为起点 (Math.PI / 2 * 3)，顺时针分布
-      // 为了让 seat 0 在底部，我们需要特殊的映射
-      // seat 0 -> 90度 (Math.PI/2) -- 在Canvas坐标系中，90度是正下方
-      
-      // 让我们重新定义：
-      // 0度: 右侧
-      // 90度: 底部
-      // 180度: 左侧
-      // 270度: 顶部
-      
       if (seatIndex === 0) {
-        return { leftPct: 50, topPct: 100 }; // 强制底部对齐
-      }
-      
-      // 计算对家位置（如果有偶数个座位，seatCount/2 的位置应该在顶部）
-      const topSeatIndex = Math.floor(seatCount / 2);
-      if (seatIndex === topSeatIndex) {
-        return { leftPct: 50, topPct: 0 }; // 强制顶部对齐
+        return { leftPct: 50, topPct: layout.bottom };
       }
 
-      // 其他座位均匀分布
-      // 我们希望座位分布在椭圆周围
-      // 我们可以将剩余座位分为两组：左边和右边
-      
-      // 简单算法：平均分布角度，然后修正 0 和 top 的位置
+      const topSeatIndex = Math.floor(seatCount / 2);
+      if (seatIndex === topSeatIndex) {
+        return { leftPct: 50, topPct: layout.top };
+      }
+
       const angleStep = 360 / seatCount;
       const angleDeg = 90 + angleStep * seatIndex;
-      
       const angleRad = (Math.PI / 180) * angleDeg;
-      
-      // 计算位置
-      let leftPct = 50 + Math.cos(angleRad) * rx;
-      let topPct = 50 + Math.sin(angleRad) * ry;
-      
-      // 底部玩家特殊位置修正：大幅上移避免被底部操作栏遮挡
-      if (seatIndex === 0) {
-        topPct = 88; // 与2人模式保持一致
-      }
-      
-      // 边缘修正：防止溢出
-      leftPct = Math.max(0, Math.min(100, leftPct));
-      topPct = Math.max(0, Math.min(100, topPct));
-      
+
+      let leftPct = 50 + Math.cos(angleRad) * layout.rx;
+      let topPct = 50 + Math.sin(angleRad) * layout.ry;
+
+      leftPct = Math.max(10, Math.min(90, leftPct));
+      topPct = Math.max(layout.top, Math.min(layout.bottom, topPct));
+
       return { leftPct, topPct };
     });
   }
@@ -1068,81 +1068,116 @@ export default function TexasHoldem() {
   const seatedPlayers = rotatePlayers(gameState.players, currentPlayerId);
   const seatCount = seatedPlayers.length;
   const seatPositions = getSeatPositions(seatCount);
-  // 增加卡片宽度以适应左右布局
   const seatCardClass =
-    seatCount >= 8 ? 'w-52' : seatCount >= 6 ? 'w-56' : seatCount >= 4 ? 'w-60' : 'w-64'; 
-  
-  // 视觉风格配置
-  const tableColorClass = "bg-[#35654d]"; // 经典德州绿
-  const tableBorderClass = "border-[#4a3728]"; // 木纹色边框
+    seatCount >= 8 ? 'w-36 xl:w-40' : seatCount >= 6 ? 'w-40 xl:w-44' : seatCount >= 4 ? 'w-44 xl:w-48' : 'w-52';
+  const tableArenaHeightClass =
+    seatCount >= 8 ? 'min-h-[620px] lg:min-h-[680px] xl:min-h-[740px]' : seatCount >= 6 ? 'min-h-[580px] lg:min-h-[640px] xl:min-h-[700px]' : 'min-h-[520px] lg:min-h-[600px] xl:min-h-[660px]';
+  const currentTurnPlayer = gameState.players[gameState.currentPlayerIndex];
+  const myPlayer = gameState.players.find(player => player.id === currentPlayerId) ?? seatedPlayers[0];
+  const activePlayers = gameState.players.filter(player => !player.isFolded);
+  const botCount = gameState.players.filter(player => player.isBot).length;
+  const humanCount = gameState.players.length - botCount;
+  const pendingCallAmount = myPlayer ? Math.max(0, gameState.currentBet - myPlayer.bet) : 0;
+  const recentHandHistory = (gameState.actionHistory ?? []).slice(-8);
+  const handNumber = gameState.handNumber ?? 1;
+  const shellCardClass = 'border-white/10 bg-slate-950/55 text-white backdrop-blur-xl shadow-[0_24px_80px_rgba(0,0,0,0.35)]';
+
+  function formatHistoryMessage(event: GameHistoryEvent): string {
+    switch (event.kind) {
+      case 'hand_start':
+        return event.note ?? `第 ${event.handNumber} 手开始`;
+      case 'blind':
+        return `${event.playerName ?? '玩家'} 支付${event.blindType === 'small' ? '小盲' : '大盲'}${event.amount ? ` ${event.amount}` : ''}`;
+      case 'phase_change':
+        return event.note ?? `进入 ${event.phase} 阶段`;
+      case 'hand_end':
+        return event.note ?? '本手结束';
+      case 'action':
+        return `${event.playerName ?? '玩家'} ${event.action ?? '行动'}${event.amount ? ` ${event.amount}` : ''}`;
+      default:
+        return event.note ?? '牌局更新';
+    }
+  }
+
+  function getHistoryAccent(event: GameHistoryEvent): string {
+    switch (event.kind) {
+      case 'hand_start':
+        return 'border-cyan-400/40 bg-cyan-400/10 text-cyan-100';
+      case 'blind':
+        return 'border-amber-400/40 bg-amber-400/10 text-amber-100';
+      case 'phase_change':
+        return 'border-emerald-400/40 bg-emerald-400/10 text-emerald-100';
+      case 'hand_end':
+        return 'border-fuchsia-400/40 bg-fuchsia-400/10 text-fuchsia-100';
+      case 'action':
+      default:
+        return 'border-slate-200/10 bg-white/5 text-slate-100';
+    }
+  }
 
   function renderSeatCard(player: Player, variant: 'table' | 'compact') {
     const isMe = player.id === currentPlayerId;
     const hiddenCards = !isMe && (!revealOthers || player.isFolded);
-    // 缩小卡片尺寸以适应框内显示
-    const cardSizeClass = variant === 'compact' ? 'w-8 h-12' : 'w-10 h-14';
-    
-    // 玩家卡片样式升级
+    const cardSize: 'sm' = 'sm';
     const cardBgClass = isMe 
-      ? 'bg-black/90 border-yellow-500/50' 
+      ? 'bg-slate-950/90 border-amber-400/40' 
       : player.isCurrent 
-        ? 'bg-black/80 border-yellow-400' 
-        : 'bg-black/60 border-white/10';
-        
-    const textColorClass = 'text-white';
+        ? 'bg-slate-950/85 border-emerald-400/50' 
+        : 'bg-slate-950/70 border-white/10';
+    const avatarClass = player.isBot ? 'bg-fuchsia-950 text-fuchsia-200' : 'bg-sky-950 text-sky-200';
+    const isCompact = variant === 'compact';
 
     return (
       <Card
-        className={`relative transition-all border shadow-xl backdrop-blur-sm overflow-visible ${cardBgClass} ${
-          player.isCurrent ? 'ring-2 ring-yellow-400 ring-offset-2 ring-offset-transparent' : ''
-        } ${player.isFolded ? 'opacity-50 grayscale' : ''}`}
+        className={`relative overflow-visible border shadow-xl backdrop-blur-sm transition-all ${cardBgClass} ${
+          player.isCurrent ? 'ring-2 ring-emerald-300/60 ring-offset-0' : ''
+        } ${player.isFolded ? 'opacity-45 grayscale' : ''}`}
       >
-        <div className="flex items-center justify-between p-2 gap-1 h-20">
-          {/* 左侧信息区域：头像、名字、筹码 */}
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-             <div className={`w-9 h-9 shrink-0 rounded-full flex items-center justify-center ${player.isBot ? 'bg-purple-900' : 'bg-blue-900'} border-2 border-white/20 shadow-inner`}>
-               {player.isBot ? <Bot className="w-5 h-5 text-purple-200" /> : <User className="w-5 h-5 text-blue-200" />}
-             </div>
-             
-             <div className="flex flex-col min-w-0">
-                <div className="flex items-center gap-1">
-                  <span className={`text-sm font-bold truncate max-w-[60px] ${textColorClass}`}>{player.name}</span>
-                  {player.isDealer && <Badge variant="secondary" className="h-3 px-1 text-[9px] bg-white text-black font-bold shrink-0">D</Badge>}
-                  {isMe && <Badge variant="default" className="h-3 px-1 text-[9px] bg-blue-600 shrink-0">你</Badge>}
-                </div>
-                <div className="flex items-center gap-1">
-                   <Coins className="w-3 h-3 text-yellow-400 shrink-0" />
-                   <span className="text-xs text-yellow-400 font-mono font-bold tracking-wide">{player.chips}</span>
-                </div>
-             </div>
+        <div className={`flex items-center justify-between gap-2 ${isCompact ? 'p-2.5' : 'p-3'}`}>
+          <div className="flex min-w-0 items-center gap-2">
+            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-white/15 ${avatarClass}`}>
+              {player.isBot ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
+            </div>
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="max-w-[88px] truncate text-sm font-bold text-white">{player.name}</span>
+                {player.isDealer && <Badge variant="secondary" className="h-4 px-1.5 text-[9px] font-bold bg-white text-black">D</Badge>}
+                {isMe && <Badge variant="default" className="h-4 px-1.5 text-[9px] bg-sky-500 text-white">你</Badge>}
+              </div>
+              <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-200">
+                <Coins className="h-3 w-3 shrink-0" />
+                <span className="font-mono font-bold">{player.chips}</span>
+                <span className="text-white/35">·</span>
+                <span className={player.isCurrent ? 'text-emerald-300' : 'text-white/70'}>
+                  {player.isCurrent ? '行动中' : player.isFolded ? '已弃牌' : player.isAllIn ? '已全押' : '在局'}
+                </span>
+              </div>
+            </div>
           </div>
-          
-          {/* 右侧手牌区域 - 在框内靠右 */}
-          <div className="flex justify-center pl-1 shrink-0 pr-4">
+
+          <div className="flex shrink-0 items-center -space-x-2">
             {player.cards.length > 0 ? (
-               player.cards.map((card, index) => (
-                <div key={index} className={`${cardSizeClass} shadow-2xl transform transition-transform hover:-translate-y-2 ${index === 0 ? '-rotate-[12deg]' : 'rotate-[12deg]'}`}>
-                  {renderCard(card, hiddenCards)}
+              player.cards.map((card, index) => (
+                <div key={index} className={`${index === 0 ? '-rotate-6' : 'rotate-6'} transition-transform duration-200 hover:-translate-y-1`}>
+                  {renderCard(card, hiddenCards, cardSize)}
                 </div>
               ))
             ) : (
-              // 占位符，保持高度一致
-              <div className={`${cardSizeClass} opacity-0`}></div>
+              <div className="h-14 w-10 opacity-0" />
             )}
           </div>
         </div>
 
-        {/* 下注额展示 - 悬浮在右上角 */}
         {player.bet > 0 && (
-          <div className="absolute -top-3 -right-2 bg-yellow-500 text-black px-2 py-0.5 rounded-md border border-yellow-600 flex items-center gap-1 shadow-lg z-20 font-bold text-xs">
-            <Coins className="w-3 h-3" />
+          <div className="absolute -right-2 -top-2 z-20 flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-300 px-2 py-0.5 text-[11px] font-black text-slate-950 shadow-lg">
+            <Coins className="h-3 w-3" />
             <span>{player.bet}</span>
           </div>
         )}
 
-        {/* 全押标识 */}
         {player.isAllIn && (
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-red-600/90 text-white text-xs font-bold px-4 py-1 rounded-sm rotate-12 border-2 border-white shadow-lg z-30 animate-pulse whitespace-nowrap">
+          <div className="absolute left-1/2 top-1/2 z-30 -translate-x-1/2 -translate-y-1/2 rounded-full border border-red-300/50 bg-red-500/90 px-3 py-1 text-[10px] font-black tracking-[0.25em] text-white shadow-lg">
             ALL IN
           </div>
         )}
@@ -1150,370 +1185,275 @@ export default function TexasHoldem() {
     );
   }
 
+  const actionButtonBase =
+    'relative transition-[transform,box-shadow,filter,background-color,border-color] duration-150 ease-out hover:-translate-y-0.5 active:translate-y-px active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-white/30 focus-visible:ring-offset-0 disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-35 disabled:saturate-0 disabled:brightness-75 disabled:shadow-none disabled:hover:shadow-none disabled:hover:translate-y-0 disabled:active:scale-100';
+  const adjustButtonBase =
+    'transition-[transform,background-color,color] duration-150 ease-out active:translate-y-px active:scale-[0.97] disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-35 disabled:saturate-0 disabled:brightness-75';
+
   return (
-    <div className="flex flex-col min-h-screen bg-gradient-to-br from-green-800 to-green-900 overflow-hidden">
-      {/* 顶部导航栏 */}
-      <div className="flex justify-between items-center p-4 text-white z-10 shrink-0">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => router.push('/setup')}
-            className="bg-white/10 hover:bg-white/20 text-white border-white/20 backdrop-blur-sm"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            返回
-          </Button>
-          <h1 className="text-xl font-bold hidden sm:block">德州扑克</h1>
-          <Badge variant="secondary" className="bg-white/20 backdrop-blur-sm">
-            {getPhaseName(gameState.phase).toUpperCase()}
-          </Badge>
-          <Badge
-            variant={isMyTurn ? 'default' : 'secondary'}
-            className={`${isMyTurn ? 'bg-yellow-500 text-black' : 'bg-white/20 text-white'} backdrop-blur-sm transition-colors`}
-          >
-            {isMyTurn ? '你的回合' : '等待中'}
-          </Badge>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowConsole(v => !v)}
-            className="bg-white/10 hover:bg-white/20 text-white border-white/20 backdrop-blur-sm"
-          >
-            <Terminal className="w-4 h-4 mr-2" />
-            日志
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={refreshGame}
-            disabled={loading}
-            className="bg-white/10 hover:bg-white/20 text-white border-white/20 backdrop-blur-sm"
-          >
-            <RotateCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''} mr-2`} />
-            刷新
-          </Button>
-          <div className={`flex items-center gap-2 ml-2 px-3 py-1.5 rounded-full backdrop-blur-sm ${wsConnected ? 'bg-green-500/30 border border-green-500/50' : 'bg-red-500/30 border border-red-500/50 animate-pulse'}`}>
-            <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-400' : 'bg-red-400'}`}></div>
-            <span className="text-xs text-white">{wsConnected ? '已连接' : '断开中'}</span>
-          </div>
-        </div>
-      </div>
-
-      {error && (
-        <div className="mx-4 mb-2 bg-red-500/20 border border-red-500 text-red-200 px-4 py-3 rounded-lg backdrop-blur-md z-20">
-          {error}
-        </div>
-      )}
-
-      {/* 游戏主区域 - 占据剩余空间，增加底部padding避免遮挡 */}
-      <div className="flex-1 relative flex items-center justify-center p-4 md:p-8 pb-32 md:pb-40 overflow-hidden">
-        <Card className={`relative w-full max-w-6xl aspect-[16/9] ${tableColorClass} border-[12px] ${tableBorderClass} rounded-[120px] shadow-2xl flex items-center justify-center overflow-visible`}>
-            {isShowdownPending && (
-              <div className="absolute left-1/2 top-6 -translate-x-1/2 z-30 bg-black/60 backdrop-blur-md px-5 py-2 rounded-full border border-white/10 shadow-lg">
-                <span className="text-white font-bold">
-                  摊牌中{showdownCountdown > 0 ? `，${showdownCountdown}s 后结算` : '，结算中...'}
-                </span>
-              </div>
-            )}
-            {isFoldResultPending && (
-              <div className="absolute left-1/2 top-6 -translate-x-1/2 z-30 bg-black/60 backdrop-blur-md px-5 py-2 rounded-full border border-white/10 shadow-lg">
-                <span className="text-white font-bold">
-                  对手弃牌，{resultRevealCountdown}s 后展示结果
-                </span>
-              </div>
-            )}
-            {/* 移动端简易视图 */}
-            <div className="md:hidden w-full h-full p-4 overflow-y-auto">
-              <div className="grid grid-cols-2 gap-2 mb-4">
-                {seatedPlayers.map(player => (
-                  <div key={player.id}>{renderSeatCard(player, 'compact')}</div>
-                ))}
-              </div>
-
-              <div className="flex justify-center items-center gap-2 my-4 bg-black/20 p-2 rounded-xl">
-                {gameState.communityCards.length === 0 ? (
-                  <div className="flex gap-1">
-                    {[...Array(5)].map((_, index) => (
-                      <div
-                        key={index}
-                        className="w-10 h-14 bg-green-900/40 rounded border border-green-500/30 flex items-center justify-center"
-                      >
-                        <span className="text-white/20 text-lg">?</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="flex gap-1">
-                    {gameState.communityCards.map((card, index) => (
-                      <div key={index} className="w-10 h-14 transform scale-90">{renderCard(card)}</div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="flex justify-center">
-                <div className="bg-black/40 px-4 py-1.5 rounded-full border border-yellow-500/20">
-                  <div className="flex items-center gap-2 text-white">
-                    <Coins className="w-4 h-4 text-yellow-400" />
-                    <span className="text-sm font-bold">底池: {gameState.pot}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* 桌面端完整视图 */}
-            <div className="hidden md:block absolute inset-0">
-              {/* 公共牌区域 - 绝对居中 */}
-              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-6 z-10">
-                <div className="flex justify-center items-center gap-3">
-                  {gameState.communityCards.length === 0 ? (
-                    <div className="flex gap-3">
-                      {[...Array(5)].map((_, index) => (
-                        <div
-                          key={index}
-                          className="w-16 h-24 bg-green-900/20 rounded-lg border-2 border-green-800/30 flex items-center justify-center shadow-inner"
-                        >
-                          <div className="w-12 h-20 border border-green-800/20 rounded opacity-30"></div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex gap-3 perspective-1000">
-                      {gameState.communityCards.map((card, index) => (
-                        <div key={index} className="animate-in fade-in zoom-in duration-500 shadow-xl rounded-lg">
-                          {renderCard(card)}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="bg-black/40 px-8 py-2 rounded-full border border-yellow-500/20 backdrop-blur-sm shadow-lg">
-                  <div className="flex items-center gap-3 text-white">
-                    <Coins className="w-6 h-6 text-yellow-400 drop-shadow-md" />
-                    <span className="text-2xl font-bold font-mono tracking-wider text-yellow-100 drop-shadow-md">
-                      {gameState.pot}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* 玩家座位 */}
-              {seatedPlayers.map((player, seatIndex) => {
-                const pos = seatPositions[seatIndex];
-                return (
-                  <div
-                    key={player.id}
-                    className={`${seatCardClass} z-20 transition-all duration-500 ease-out`}
-                    style={{
-                      left: `${pos.leftPct}%`,
-                      top: `${pos.topPct}%`,
-                      transform: 'translate(-50%, -50%)',
-                      position: 'absolute',
-                    }}
-                  >
-                    {renderSeatCard(player, 'table')}
-                  </div>
-                );
-              })}
-            </div>
-        </Card>
-      </div>
-
-      {/* 胜利弹窗 */}
-      {winnerInfo && winnerInfo.show && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none bg-black/50 backdrop-blur-sm">
-          <div className="bg-black/90 text-white p-5 rounded-2xl border border-white/15 shadow-2xl animate-in zoom-in duration-300 pointer-events-auto max-w-2xl w-full mx-4 max-h-[82vh] overflow-y-auto">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl">{winnerInfo.endType === 'game' ? '👑' : '🏁'}</span>
-                  <h2 className="text-xl font-black text-yellow-300 truncate">
-                    {winnerInfo.endType === 'game'
-                      ? '整局结束'
-                      : winnerInfo.winners.length > 1
-                        ? '本局平分'
-                        : '本局获胜'}
-                  </h2>
-                  <Badge variant="secondary" className="bg-white/10 text-white border border-white/10">
-                    {winnerInfo.endType === 'game' ? '整局结算' : winnerInfo.reasonLabel}
-                  </Badge>
-                  {winnerInfo.endType === 'game' && (
-                    <Badge variant="secondary" className="bg-white/5 text-white/80 border border-white/10">
-                      {winnerInfo.reasonLabel}
-                    </Badge>
-                  )}
-                </div>
-                <div className="mt-1 text-xs text-white/70">
-                  {winnerInfo.endType === 'game'
-                    ? `冠军：${winnerInfo.champion?.name ?? winnerInfo.winners[0]?.name ?? '未知'} · 下一局将重置筹码`
-                    : `${winnerInfo.baselineLabel}${nextRoundCountdown > 0 ? ` · ${nextRoundCountdown}s 后自动开局` : ''}`}
-                </div>
-              </div>
-
-              <div className="shrink-0 flex items-center gap-2 bg-yellow-500/15 px-3 py-2 rounded-xl border border-yellow-500/25">
-                <Coins className="w-4 h-4 text-yellow-300" />
-                <span className="font-mono font-extrabold text-yellow-200 text-lg">+{winnerInfo.amount}</span>
-              </div>
-            </div>
-
-            {winnerInfo.showBoard && (
-              <div className="mt-4">
-                <div className="text-xs font-bold text-white/70 mb-2">公共牌</div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {winnerInfo.boardCards.map((card, idx) => (
-                    <div key={idx} className="scale-[0.85] origin-left">{renderCard(card)}</div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4">
-              <div className="flex items-center justify-between">
-                <div className="text-xs font-bold text-white/70">输赢明细</div>
-                {winnerInfo.pots && winnerInfo.pots.length > 1 && (
-                  <div className="text-[11px] text-white/60">
-                    {winnerInfo.pots.map((p, i) => `P${i + 1}:${p.amount}`).join(' · ')}
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-2 space-y-2">
-                {winnerInfo.rows.map(({ player, delta, isWinner, handDescription, bestCards }) => {
-                  const deltaText = delta >= 0 ? `+${delta}` : `${delta}`;
-                  const showHole = winnerInfo.showHands && (!player.isFolded || player.id === currentPlayerId);
-                  const holeCards = showHole ? player.cards : [];
-                  const bestText =
-                    isWinner && bestCards && bestCards.length > 0
-                      ? bestCards.map(formatCardText).join(' ')
-                      : '';
-
-                  return (
-                    <div
-                      key={player.id}
-                      className={`rounded-xl border px-3 py-2 ${isWinner ? 'bg-yellow-500/10 border-yellow-500/25' : 'bg-white/5 border-white/10'}`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0 flex items-center gap-2">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${player.isBot ? 'bg-purple-900' : 'bg-blue-900'} border border-white/15`}>
-                            {player.isBot ? <Bot className="w-4 h-4 text-purple-200" /> : <User className="w-4 h-4 text-blue-200" />}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="font-bold truncate max-w-[140px]">{player.name}</span>
-                              {player.id === currentPlayerId && (
-                                <Badge variant="default" className="h-5 px-2 text-[10px] bg-blue-600">你</Badge>
-                              )}
-                              {isWinner && (
-                                <Badge variant="secondary" className="h-5 px-2 text-[10px] bg-yellow-500 text-black">胜</Badge>
-                              )}
-                              {player.isFolded && (
-                                <Badge variant="secondary" className="h-5 px-2 text-[10px] bg-white/10 text-white/80">弃</Badge>
-                              )}
-                              {!!handDescription && (
-                                <Badge variant="secondary" className="h-5 px-2 text-[10px] bg-emerald-500/15 text-emerald-200 border border-emerald-500/20">
-                                  {handDescription}
-                                </Badge>
-                              )}
-                            </div>
-                            {bestText && (
-                              <div className="text-[11px] text-white/60 mt-0.5 truncate">
-                                成牌 {bestText}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className={`shrink-0 font-mono font-extrabold ${delta >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
-                          {deltaText}
-                        </div>
-                      </div>
-
-                      {holeCards.length > 0 && (
-                        <div className="mt-2 flex items-center gap-2">
-                          {holeCards.map((card, idx) => (
-                            <div key={idx} className="scale-[0.7] origin-left">{renderCard(card, player.id !== currentPlayerId && player.isFolded)}</div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="mt-5 flex items-center gap-3">
-              {winnerInfo.endType === 'game' && (
-                <Button
-                  onClick={() => router.push('/setup')}
-                  size="lg"
-                  disabled={nextRoundInFlight}
-                  className="bg-white/10 hover:bg-white/15 text-white font-bold border border-white/10"
-                >
-                  返回开局设置
-                </Button>
-              )}
+    <div className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(22,163,74,0.18),_transparent_28%),linear-gradient(180deg,_#0f172a_0%,_#10241d_48%,_#07120d_100%)] text-white">
+      <div className="mx-auto flex min-h-screen max-w-[1700px] flex-col gap-4 px-3 py-3 md:px-4 xl:px-5">
+        <div className="rounded-[28px] border border-white/10 bg-black/25 px-4 py-4 shadow-[0_20px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex flex-wrap items-center gap-2 md:gap-3">
               <Button
-                onClick={() => void handleNextRound(winnerInfo.gameId)}
-                size="lg"
-                disabled={nextRoundInFlight}
-                className="flex-1 bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-black font-black shadow-lg shadow-yellow-900/40"
+                variant="outline"
+                size="sm"
+                onClick={() => router.push('/setup')}
+                className="border-white/15 bg-white/5 text-white hover:bg-white/10"
               >
-                {nextRoundInFlight
-                  ? winnerInfo.endType === 'game'
-                    ? '重置中...'
-                    : '开局中...'
-                  : winnerInfo.endType === 'game'
-                    ? '开始新一整局'
-                    : '开始下一局'}
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                返回
               </Button>
+              <div>
+                <div className="text-lg font-black tracking-wide md:text-xl">多人德州桌</div>
+                <div className="text-xs text-white/60">
+                  第 {handNumber} 手 · {seatCount} 人桌 · {humanCount} 真人 / {botCount} 机器人
+                </div>
+              </div>
+              <Badge variant="secondary" className="border border-white/10 bg-white/10 text-white">
+                {getPhaseName(gameState.phase)}
+              </Badge>
+              <Badge
+                variant={isMyTurn ? 'default' : 'secondary'}
+                className={isMyTurn ? 'bg-amber-400 text-slate-950' : 'border border-white/10 bg-white/10 text-white'}
+              >
+                {isMyTurn ? '你的回合' : `当前 ${currentTurnPlayer?.name ?? '未知玩家'}`}
+              </Badge>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {[
+                { label: '底池', value: gameState.pot, tone: 'border-amber-400/20 bg-amber-400/10 text-amber-100' },
+                { label: '当前注', value: gameState.currentBet, tone: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-100' },
+                { label: '在局', value: `${activePlayers.length}/${seatCount}`, tone: 'border-cyan-400/20 bg-cyan-400/10 text-cyan-100' },
+                { label: '盲注', value: `${gameState.settings.smallBlind}/${gameState.settings.bigBlind}`, tone: 'border-white/10 bg-white/5 text-white' },
+              ].map(metric => (
+                <div key={metric.label} className={`rounded-2xl border px-3 py-2 ${metric.tone}`}>
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-white/55">{metric.label}</div>
+                  <div className="text-sm font-black md:text-base">{metric.value}</div>
+                </div>
+              ))}
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowConsole(v => !v)}
+                className="border-white/15 bg-white/5 text-white hover:bg-white/10"
+              >
+                <Terminal className="mr-2 h-4 w-4" />
+                {showConsole ? '隐藏日志' : '显示日志'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={refreshGame}
+                disabled={loading}
+                className="border-white/15 bg-white/5 text-white hover:bg-white/10"
+              >
+                <RotateCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                刷新
+              </Button>
+              <div className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${wsConnected ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-100' : 'border-red-400/40 bg-red-400/10 text-red-100'}`}>
+                <span className={`h-2 w-2 rounded-full ${wsConnected ? 'bg-emerald-400' : 'bg-red-400'}`}></span>
+                {wsConnected ? '实时连接' : '连接中断'}
+              </div>
             </div>
           </div>
         </div>
-      )}
 
-      {/* 底部操作控制台 - 悬浮式玻璃拟态 */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 pb-6 z-30">
-        <div className="max-w-4xl mx-auto">
-          {(() => {
-            const actionButtonBase =
-              "relative transition-[transform,box-shadow,filter,background-color,border-color] duration-150 ease-out hover:-translate-y-0.5 active:translate-y-px active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-white/30 focus-visible:ring-offset-0 disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-35 disabled:saturate-0 disabled:brightness-75 disabled:shadow-none disabled:hover:shadow-none disabled:hover:translate-y-0 disabled:active:scale-100";
-            const adjustButtonBase =
-              "transition-[transform,background-color,color] duration-150 ease-out active:translate-y-px active:scale-[0.97] disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-35 disabled:saturate-0 disabled:brightness-75";
+        {error && (
+          <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-red-100 backdrop-blur-md">
+            {error}
+          </div>
+        )}
 
-            return (
-              <>
-                <div className="flex justify-center mb-3">
-                  <div className="bg-black/60 backdrop-blur-md px-4 py-1.5 rounded-full border border-white/10 flex items-center gap-2 shadow-lg">
-                    {isMyTurn && (
-                      <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-500"></span>
-                      </span>
-                    )}
-                    <span className="text-white/90 text-sm font-medium">
+        <div className="grid flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="flex min-h-0 flex-col gap-4">
+            <Card className={`${shellCardClass} overflow-hidden`}>
+              <div className="border-b border-white/10 px-4 py-4 lg:px-6">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Table Flow</div>
+                    <h2 className="mt-1 text-2xl font-black text-white">
+                      {isMyTurn ? '轮到你做决定' : `${currentTurnPlayer?.name ?? '未知玩家'} 正在行动`}
+                    </h2>
+                    <p className="mt-1 text-sm text-white/60">
                       {gameState.phase === 'showdown'
-                        ? `摊牌中，${showdownCountdown > 0 ? `${showdownCountdown}s 后结算...` : '结算中...' }`
+                        ? `摊牌阶段${showdownCountdown > 0 ? `，${showdownCountdown}s 后自动结算` : '，等待结算'}`
                         : gameState.phase === 'completed' && isFoldResultPending
-                          ? `对手弃牌，${resultRevealCountdown}s 后展示结果...`
+                          ? `对手弃牌，${resultRevealCountdown}s 后展示结果`
                           : isMyTurn
-                            ? '轮到你了，请选择操作'
-                            : `等待 ${gameState.players[gameState.currentPlayerIndex]?.name} 思考中...`}
-                    </span>
+                            ? `你当前还需跟注 ${pendingCallAmount}，最小加注增量 ${gameState.minRaise || gameState.settings.bigBlind}`
+                            : `关注右侧脉络面板，查看本手下注推进`}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-white/45">你的位置</div>
+                      <div className="mt-1 text-sm font-bold text-white">{myPlayer?.isDealer ? '庄位' : '非庄位'}</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-white/45">你的筹码</div>
+                      <div className="mt-1 font-mono text-sm font-bold text-amber-100">{myPlayer?.chips ?? 0}</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-white/45">你本轮下注</div>
+                      <div className="mt-1 font-mono text-sm font-bold text-white">{myPlayer?.bet ?? 0}</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-white/45">待跟注</div>
+                      <div className="mt-1 font-mono text-sm font-bold text-emerald-100">{pendingCallAmount}</div>
+                    </div>
                   </div>
                 </div>
+              </div>
 
-                <div className="bg-black/80 backdrop-blur-xl rounded-2xl p-2 border border-white/10 shadow-2xl flex flex-wrap md:flex-nowrap items-center justify-center gap-2 md:gap-4">
-                  <div className="flex items-center gap-2 shrink-0">
+              <div className="p-3 sm:p-4 lg:p-5">
+                <div className={`relative overflow-hidden rounded-[34px] border border-white/10 bg-[#1c4332] ${tableArenaHeightClass}`}>
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,179,132,0.35),_rgba(14,44,33,0.96)_72%)]" />
+                  <div className="absolute inset-[5%] rounded-[999px] border-[18px] border-[#60472f] bg-black/10 shadow-[inset_0_0_80px_rgba(0,0,0,0.22)]" />
+                  <div className="absolute inset-[9%] rounded-[999px] border border-white/10 bg-[radial-gradient(circle_at_center,_rgba(34,197,94,0.18),_rgba(0,0,0,0)_70%)]" />
+                  <div className="absolute inset-x-10 top-4 flex justify-between text-[10px] uppercase tracking-[0.35em] text-white/40">
+                    <span>Dealer Orbit</span>
+                    <span>Side Pressure</span>
+                  </div>
+
+                  {isShowdownPending && (
+                    <div className="absolute left-1/2 top-6 z-30 -translate-x-1/2 rounded-full border border-white/10 bg-black/60 px-5 py-2 shadow-lg backdrop-blur-md">
+                      <span className="font-bold text-white">
+                        摊牌中{showdownCountdown > 0 ? `，${showdownCountdown}s 后结算` : '，结算中...'}
+                      </span>
+                    </div>
+                  )}
+                  {isFoldResultPending && (
+                    <div className="absolute left-1/2 top-6 z-30 -translate-x-1/2 rounded-full border border-white/10 bg-black/60 px-5 py-2 shadow-lg backdrop-blur-md">
+                      <span className="font-bold text-white">
+                        对手弃牌，{resultRevealCountdown}s 后展示结果
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="relative z-10 h-full md:hidden overflow-y-auto p-4">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {seatedPlayers.map(player => (
+                        <div key={player.id}>{renderSeatCard(player, 'compact')}</div>
+                      ))}
+                    </div>
+
+                    <div className="mt-5 rounded-[28px] border border-white/10 bg-black/25 p-4">
+                      <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/45">
+                        <span>Board</span>
+                        <span>Pot {gameState.pot}</span>
+                      </div>
+                      <div className="mt-4 flex justify-center gap-2">
+                        {gameState.communityCards.length === 0
+                          ? [...Array(5)].map((_, index) => (
+                              <div
+                                key={index}
+                                className="flex h-14 w-10 items-center justify-center rounded-md border border-white/10 bg-white/5 text-white/15"
+                              >
+                                ?
+                              </div>
+                            ))
+                          : gameState.communityCards.map((card, index) => (
+                              <div key={index}>{renderCard(card, false, 'sm')}</div>
+                            ))}
+                      </div>
+                      <div className="mt-4 flex items-center justify-center gap-2 rounded-full border border-amber-400/20 bg-amber-300/10 px-4 py-2 text-amber-100">
+                        <Coins className="h-4 w-4" />
+                        <span className="font-mono text-sm font-black">{gameState.pot}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="relative z-10 hidden h-full md:block">
+                    <div className="absolute inset-[4%_5%_6%]">
+                      <div className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-5">
+                        <div className="rounded-[28px] border border-white/10 bg-black/25 px-5 py-3 backdrop-blur-md shadow-xl">
+                          <div className="flex items-center justify-center gap-3">
+                            {gameState.communityCards.length === 0
+                              ? [...Array(5)].map((_, index) => (
+                                  <div
+                                    key={index}
+                                    className="flex h-20 w-14 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/15"
+                                  >
+                                    ?
+                                  </div>
+                                ))
+                              : gameState.communityCards.map((card, index) => (
+                                  <div key={index} className="animate-in fade-in zoom-in duration-500">
+                                    {renderCard(card)}
+                                  </div>
+                                ))}
+                          </div>
+                        </div>
+
+                        <div className="rounded-full border border-amber-400/20 bg-black/35 px-8 py-3 shadow-lg backdrop-blur-sm">
+                          <div className="flex items-center gap-3">
+                            <Coins className="h-6 w-6 text-amber-300" />
+                            <div>
+                              <div className="text-[10px] uppercase tracking-[0.25em] text-white/45">Main Pot</div>
+                              <div className="font-mono text-2xl font-black tracking-wider text-amber-100">{gameState.pot}</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {seatedPlayers.map((player, seatIndex) => {
+                        const pos = seatPositions[seatIndex];
+                        return (
+                          <div
+                            key={player.id}
+                            className={`${seatCardClass} absolute z-20 transition-all duration-500 ease-out`}
+                            style={{
+                              left: `${pos.leftPct}%`,
+                              top: `${pos.topPct}%`,
+                              transform: 'translate(-50%, -50%)',
+                            }}
+                          >
+                            {renderSeatCard(player, 'table')}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_320px]">
+              <Card className={`${shellCardClass} p-4`}>
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.25em] text-white/45">Action Console</div>
+                      <div className="mt-1 text-base font-bold text-white">
+                        {gameState.phase === 'showdown'
+                          ? `摊牌中${showdownCountdown > 0 ? ` · ${showdownCountdown}s` : ''}`
+                          : gameState.phase === 'completed' && isFoldResultPending
+                            ? `结果即将揭示 · ${resultRevealCountdown}s`
+                            : isMyTurn
+                              ? '轮到你了，请选择操作'
+                              : `等待 ${currentTurnPlayer?.name ?? '未知玩家'} 思考中...`}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 text-xs text-white/60">
+                      <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">当前阶段 {getPhaseName(gameState.phase)}</div>
+                      <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">待跟注 {pendingCallAmount}</div>
+                      <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">最小加注 {gameState.minRaise || gameState.settings.bigBlind}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button
                       variant="destructive"
                       size="default"
                       onClick={handleFold}
                       disabled={!isMyTurn}
-                      className={`w-20 font-black tracking-wide text-white border border-red-300/30 shadow-[0_10px_30px_rgba(0,0,0,0.35)] hover:shadow-[0_14px_40px_rgba(239,68,68,0.25)] bg-gradient-to-b from-red-500 to-red-700 hover:from-red-400 hover:to-red-600 disabled:hover:from-red-500 disabled:hover:to-red-700 ${actionButtonBase}`}
+                      className={`w-20 border border-red-300/30 bg-gradient-to-b from-red-500 to-red-700 font-black tracking-wide text-white shadow-[0_10px_30px_rgba(0,0,0,0.35)] hover:from-red-400 hover:to-red-600 ${actionButtonBase}`}
                     >
                       弃牌
                     </Button>
@@ -1522,7 +1462,7 @@ export default function TexasHoldem() {
                       size="default"
                       onClick={handleCheck}
                       disabled={!isMyTurn || !canPerformAction('check')}
-                      className={`w-20 font-black text-white border border-slate-200/15 bg-slate-400/10 hover:bg-slate-300/15 hover:border-slate-200/25 disabled:hover:bg-slate-400/10 disabled:hover:border-slate-200/15 shadow-[0_10px_30px_rgba(0,0,0,0.25)] ${actionButtonBase}`}
+                      className={`w-20 border border-slate-200/15 bg-slate-400/10 font-black text-white hover:bg-slate-300/15 ${actionButtonBase}`}
                     >
                       过牌
                     </Button>
@@ -1531,34 +1471,33 @@ export default function TexasHoldem() {
                       size="default"
                       onClick={handleCall}
                       disabled={!isMyTurn || !canPerformAction('call')}
-                      className={`min-w-[110px] font-black text-white border border-emerald-200/25 shadow-[0_14px_40px_rgba(16,185,129,0.20)] hover:shadow-[0_18px_54px_rgba(16,185,129,0.28)] bg-gradient-to-b from-emerald-500 to-emerald-700 hover:from-emerald-400 hover:to-emerald-600 disabled:hover:from-emerald-500 disabled:hover:to-emerald-700 ${actionButtonBase}`}
+                      className={`min-w-[110px] border border-emerald-200/25 bg-gradient-to-b from-emerald-500 to-emerald-700 font-black text-white hover:from-emerald-400 hover:to-emerald-600 ${actionButtonBase}`}
                     >
-                      跟注 {gameState.currentBet > 0 && `(${gameState.currentBet - (gameState.players[gameState.currentPlayerIndex]?.bet || 0)})`}
+                      跟注 {gameState.currentBet > 0 && `(${pendingCallAmount})`}
                     </Button>
-                  </div>
 
-                  <div className="hidden md:block w-px h-8 bg-white/10"></div>
+                    <div className="mx-1 hidden h-8 w-px bg-white/10 md:block" />
 
-                  <div className="flex items-center gap-2 shrink-0">
-                    <div className="flex items-center bg-black/40 rounded-lg p-1 border border-white/5">
+                    <div className="flex items-center rounded-xl border border-white/5 bg-black/35 p-1">
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() =>
                           setBetAmount(Math.max(gameState.minRaise || gameState.settings.bigBlind, betAmount - gameState.settings.bigBlind))
                         }
-                        className={`h-9 w-9 text-white/60 hover:text-white hover:bg-white/12 rounded-md ${adjustButtonBase}`}
+                        className={`h-9 w-9 rounded-md text-white/60 hover:bg-white/12 hover:text-white ${adjustButtonBase}`}
                       >
                         -
                       </Button>
-                      <div className="px-2 min-w-[60px] text-center">
-                        <span className="text-yellow-400 font-mono font-bold text-lg">{betAmount}</span>
+                      <div className="min-w-[72px] px-2 text-center">
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-white/35">筹码量</div>
+                        <span className="font-mono text-lg font-black text-amber-300">{betAmount}</span>
                       </div>
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => setBetAmount(betAmount + gameState.settings.bigBlind)}
-                        className={`h-9 w-9 text-white/60 hover:text-white hover:bg-white/12 rounded-md ${adjustButtonBase}`}
+                        className={`h-9 w-9 rounded-md text-white/60 hover:bg-white/12 hover:text-white ${adjustButtonBase}`}
                       >
                         +
                       </Button>
@@ -1569,7 +1508,7 @@ export default function TexasHoldem() {
                       size="default"
                       onClick={gameState.currentBet === 0 ? handleBet : handleRaise}
                       disabled={!isMyTurn || !canPerformAction(gameState.currentBet === 0 ? 'bet' : 'raise')}
-                      className={`text-black font-black px-5 border border-yellow-200/25 shadow-[0_14px_40px_rgba(234,179,8,0.20)] hover:shadow-[0_18px_54px_rgba(234,179,8,0.28)] bg-gradient-to-b from-yellow-400 to-yellow-600 hover:from-yellow-300 hover:to-yellow-500 disabled:hover:from-yellow-400 disabled:hover:to-yellow-600 ${actionButtonBase}`}
+                      className={`border border-yellow-200/25 bg-gradient-to-b from-yellow-400 to-yellow-600 px-5 font-black text-slate-950 hover:from-yellow-300 hover:to-yellow-500 ${actionButtonBase}`}
                     >
                       {gameState.currentBet === 0 ? '下注' : '加注'}
                     </Button>
@@ -1578,88 +1517,410 @@ export default function TexasHoldem() {
                       variant="default"
                       size="default"
                       onClick={handleAllIn}
-                      disabled={!isMyTurn || gameState.players[0].chips <= 0}
-                      className={`text-white font-black px-5 border border-red-200/25 tracking-wider shadow-[0_14px_40px_rgba(239,68,68,0.22)] hover:shadow-[0_18px_54px_rgba(239,68,68,0.30)] bg-gradient-to-b from-red-500 to-red-800 hover:from-red-400 hover:to-red-700 disabled:hover:from-red-500 disabled:hover:to-red-800 ${actionButtonBase}`}
+                      disabled={!isMyTurn || (myPlayer?.chips ?? 0) <= 0}
+                      className={`border border-red-200/25 bg-gradient-to-b from-red-500 to-red-800 px-5 font-black tracking-wider text-white hover:from-red-400 hover:to-red-700 ${actionButtonBase}`}
                     >
                       ALL IN
                     </Button>
                   </div>
                 </div>
-              </>
-            );
-          })()}
-        </div>
-      </div>
+              </Card>
 
-      {showConsole ? (
-        <div className="fixed inset-4 md:right-4 md:top-24 md:bottom-4 md:left-auto md:w-80 z-40">
-          <Card className="bg-slate-950/90 border-slate-700 backdrop-blur flex flex-col h-full shadow-2xl">
-            <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between bg-black/40">
-              <div className="flex items-center gap-2 text-white">
-                <Terminal className="w-4 h-4 text-green-400" />
-                <h2 className="font-bold text-sm">游戏日志</h2>
-                <span className="text-xs text-slate-500 font-mono">({consoleLogs.length})</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setConsoleLogs([])}
-                  className="h-7 text-xs text-slate-400 hover:text-white hover:bg-white/10"
-                >
-                  清空
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowConsole(false)}
-                  className="h-7 text-xs text-slate-400 hover:text-white hover:bg-white/10"
-                >
-                  收起
-                </Button>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 font-mono text-xs">
-              {consoleLogs.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-slate-600 gap-2">
-                  <Terminal className="w-8 h-8 opacity-20" />
-                  <p>暂无日志记录</p>
-                </div>
-              ) : (
-                consoleLogs.map(log => (
-                  <div
-                    key={log.id}
-                    className={`relative pl-3 py-1 border-l-2 ${
-                      log.type === 'action'
-                        ? 'border-blue-500 text-blue-200 bg-blue-500/5'
-                        : log.type === 'phase'
-                          ? 'border-green-500 text-green-200 bg-green-500/5'
-                          : log.type === 'pot'
-                            ? 'border-yellow-500 text-yellow-200 bg-yellow-500/5'
-                            : log.type === 'error'
-                              ? 'border-red-500 text-red-200 bg-red-500/5'
-                              : 'border-slate-600 text-slate-400'
-                    }`}
-                  >
-                    <div className="flex flex-col gap-0.5">
-                      <div className="flex justify-between items-center opacity-70 text-[10px]">
-                        <span>{log.timestamp}</span>
-                        <span className="font-bold">{getLogLabel(log.type)}</span>
-                      </div>
-                      <div className="leading-relaxed break-words">
-                        {log.playerName ? `[${log.playerName}] ` : ''}
-                        {log.message}
-                      </div>
+              <Card className={`${shellCardClass} p-4 xl:hidden 2xl:block`}>
+                <div className="flex h-full flex-col gap-4">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.25em] text-white/45">Table Pulse</div>
+                    <div className="mt-1 text-lg font-black">{currentTurnPlayer?.name ?? '未知玩家'} 正在桌上施压</div>
+                    <div className="mt-1 text-sm text-white/60">
+                      最近 {recentHandHistory.length} 条本手事件，方便你在多人桌快速把握节奏。
                     </div>
                   </div>
-                ))
-              )}
-              <div ref={consoleEndRef} />
+
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/40">当前操作者</div>
+                      <div className="mt-1 font-bold">{currentTurnPlayer?.name ?? '未知'}</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/40">你的可跟注</div>
+                      <div className="mt-1 font-mono font-bold text-emerald-100">{pendingCallAmount}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 rounded-3xl border border-white/10 bg-black/20 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-bold">本手脉络</div>
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/35">Hand #{handNumber}</div>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {recentHandHistory.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-white/10 px-3 py-4 text-sm text-white/45">
+                          暂无本手历史，等待第一步行动。
+                        </div>
+                      ) : (
+                        recentHandHistory.map(event => (
+                          <div key={`${event.sequence}-${event.kind}`} className={`rounded-2xl border px-3 py-2 ${getHistoryAccent(event)}`}>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-xs font-black tracking-[0.18em]">#{event.sequence}</span>
+                              <span className="text-[10px] uppercase tracking-[0.18em] text-white/45">{event.phase}</span>
+                            </div>
+                            <div className="mt-1 text-sm">{formatHistoryMessage(event)}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </Card>
             </div>
-          </Card>
+          </div>
+
+          <aside className="hidden xl:flex xl:min-h-0 xl:flex-col xl:gap-4">
+            <Card className={`${shellCardClass} p-4`}>
+              <div className="text-xs uppercase tracking-[0.25em] text-white/45">Table Pulse</div>
+              <div className="mt-2 text-xl font-black">{currentTurnPlayer?.name ?? '未知玩家'} 正在行动</div>
+              <div className="mt-1 text-sm text-white/60">
+                多人桌信息拆到侧栏后，中央区域只负责座位和牌桌，避免视觉拥堵。
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {[
+                  { label: '仍在局', value: `${activePlayers.length}` },
+                  { label: '总玩家', value: `${seatCount}` },
+                  { label: '机器人', value: `${botCount}` },
+                  { label: '待跟注', value: `${pendingCallAmount}` },
+                ].map(item => (
+                  <div key={item.label} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3">
+                    <div className="text-[10px] uppercase tracking-[0.18em] text-white/35">{item.label}</div>
+                    <div className="mt-1 text-lg font-black text-white">{item.value}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card className={`${shellCardClass} flex min-h-0 flex-col p-4`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.25em] text-white/45">Hand Story</div>
+                  <div className="mt-1 text-lg font-black">本手脉络</div>
+                </div>
+                <Badge variant="secondary" className="border border-white/10 bg-white/5 text-white">
+                  {recentHandHistory.length} 条
+                </Badge>
+              </div>
+              <div className="mt-4 flex-1 space-y-2 overflow-y-auto pr-1">
+                {recentHandHistory.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-white/10 px-3 py-4 text-sm text-white/45">
+                    暂无本手历史，等待第一步行动。
+                  </div>
+                ) : (
+                  recentHandHistory.map(event => (
+                    <div key={`${event.sequence}-${event.kind}`} className={`rounded-2xl border px-3 py-2 ${getHistoryAccent(event)}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-black tracking-[0.18em]">#{event.sequence}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em] text-white/45">{event.phase}</span>
+                      </div>
+                      <div className="mt-1 text-sm">{formatHistoryMessage(event)}</div>
+                      {!!event.communityCards?.length && (
+                        <div className="mt-1 text-[11px] text-white/55">
+                          公共牌: {event.communityCards.join(' ')}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
+
+            {showConsole && (
+              <Card className={`${shellCardClass} flex min-h-0 flex-1 flex-col overflow-hidden`}>
+                <div className="flex items-center justify-between border-b border-white/10 bg-black/20 px-4 py-3">
+                  <div className="flex items-center gap-2 text-white">
+                    <Terminal className="h-4 w-4 text-emerald-300" />
+                    <h2 className="text-sm font-bold">实时日志</h2>
+                    <span className="font-mono text-xs text-white/35">({consoleLogs.length})</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setConsoleLogs([])}
+                      className="h-7 text-xs text-white/55 hover:bg-white/10 hover:text-white"
+                    >
+                      清空
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowConsole(false)}
+                      className="h-7 text-xs text-white/55 hover:bg-white/10 hover:text-white"
+                    >
+                      收起
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex-1 space-y-3 overflow-y-auto p-4 font-mono text-xs">
+                  {consoleLogs.length === 0 ? (
+                    <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-500">
+                      <Terminal className="h-8 w-8 opacity-20" />
+                      <p>暂无日志记录</p>
+                    </div>
+                  ) : (
+                    consoleLogs.map(log => (
+                      <div
+                        key={log.id}
+                        className={`relative border-l-2 pl-3 py-1 ${
+                          log.type === 'action'
+                            ? 'border-blue-500 bg-blue-500/5 text-blue-200'
+                            : log.type === 'phase'
+                              ? 'border-green-500 bg-green-500/5 text-green-200'
+                              : log.type === 'pot'
+                                ? 'border-yellow-500 bg-yellow-500/5 text-yellow-200'
+                                : log.type === 'error'
+                                  ? 'border-red-500 bg-red-500/5 text-red-200'
+                                  : 'border-slate-600 text-slate-400'
+                        }`}
+                      >
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center justify-between text-[10px] opacity-70">
+                            <span>{log.timestamp}</span>
+                            <span className="font-bold">{getLogLabel(log.type)}</span>
+                          </div>
+                          <div className="leading-relaxed break-words">
+                            {log.playerName ? `[${log.playerName}] ` : ''}
+                            {log.message}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  <div ref={consoleEndRef} />
+                </div>
+              </Card>
+            )}
+          </aside>
         </div>
-      ) : null}
+
+        {winnerInfo && winnerInfo.show && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div className="pointer-events-auto mx-4 max-h-[82vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-white/15 bg-black/90 p-5 text-white shadow-2xl animate-in zoom-in duration-300">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl">{winnerInfo.endType === 'game' ? '👑' : '🏁'}</span>
+                    <h2 className="truncate text-xl font-black text-yellow-300">
+                      {winnerInfo.endType === 'game'
+                        ? '整局结束'
+                        : winnerInfo.winners.length > 1
+                          ? '本局平分'
+                          : '本局获胜'}
+                    </h2>
+                    <Badge variant="secondary" className="border border-white/10 bg-white/10 text-white">
+                      {winnerInfo.endType === 'game' ? '整局结算' : winnerInfo.reasonLabel}
+                    </Badge>
+                    {winnerInfo.endType === 'game' && (
+                      <Badge variant="secondary" className="border border-white/10 bg-white/5 text-white/80">
+                        {winnerInfo.reasonLabel}
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="mt-1 text-xs text-white/70">
+                    {winnerInfo.endType === 'game'
+                      ? `冠军：${winnerInfo.champion?.name ?? winnerInfo.winners[0]?.name ?? '未知'} · 下一局将重置筹码`
+                      : `${winnerInfo.baselineLabel}${nextRoundCountdown > 0 ? ` · ${nextRoundCountdown}s 后自动开局` : ''}`}
+                  </div>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2 rounded-xl border border-yellow-500/25 bg-yellow-500/15 px-3 py-2">
+                  <Coins className="h-4 w-4 text-yellow-300" />
+                  <span className="font-mono text-lg font-extrabold text-yellow-200">+{winnerInfo.amount}</span>
+                </div>
+              </div>
+
+              {winnerInfo.showBoard && (
+                <div className="mt-4">
+                  <div className="mb-2 text-xs font-bold text-white/70">公共牌</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {winnerInfo.boardCards.map((card, idx) => (
+                      <div key={idx}>{renderCard(card, false, 'sm')}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-white/70">输赢明细</div>
+                  {winnerInfo.pots && winnerInfo.pots.length > 1 && (
+                    <div className="text-[11px] text-white/60">
+                      {winnerInfo.pots.map((p, i) => `P${i + 1}:${p.amount}`).join(' · ')}
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-2 space-y-2">
+                  {winnerInfo.rows.map(({ player, delta, isWinner, handDescription, bestCards }) => {
+                    const deltaText = delta >= 0 ? `+${delta}` : `${delta}`;
+                    const showHole = winnerInfo.showHands && (!player.isFolded || player.id === currentPlayerId);
+                    const holeCards = showHole ? player.cards : [];
+                    const bestText =
+                      isWinner && bestCards && bestCards.length > 0
+                        ? bestCards.map(formatCardText).join(' ')
+                        : '';
+
+                    return (
+                      <div
+                        key={player.id}
+                        className={`rounded-xl border px-3 py-2 ${isWinner ? 'border-yellow-500/25 bg-yellow-500/10' : 'border-white/10 bg-white/5'}`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <div className={`flex h-8 w-8 items-center justify-center rounded-full border border-white/15 ${player.isBot ? 'bg-purple-900' : 'bg-blue-900'}`}>
+                              {player.isBot ? <Bot className="h-4 w-4 text-purple-200" /> : <User className="h-4 w-4 text-blue-200" />}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span className="max-w-[140px] truncate font-bold">{player.name}</span>
+                                {player.id === currentPlayerId && (
+                                  <Badge variant="default" className="h-5 bg-blue-600 px-2 text-[10px]">你</Badge>
+                                )}
+                                {isWinner && (
+                                  <Badge variant="secondary" className="h-5 bg-yellow-500 px-2 text-[10px] text-black">胜</Badge>
+                                )}
+                                {player.isFolded && (
+                                  <Badge variant="secondary" className="h-5 bg-white/10 px-2 text-[10px] text-white/80">弃</Badge>
+                                )}
+                                {!!handDescription && (
+                                  <Badge variant="secondary" className="h-5 border border-emerald-500/20 bg-emerald-500/15 px-2 text-[10px] text-emerald-200">
+                                    {handDescription}
+                                  </Badge>
+                                )}
+                              </div>
+                              {bestText && (
+                                <div className="mt-0.5 truncate text-[11px] text-white/60">成牌 {bestText}</div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className={`shrink-0 font-mono font-extrabold ${delta >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                            {deltaText}
+                          </div>
+                        </div>
+
+                        {holeCards.length > 0 && (
+                          <div className="mt-2 flex items-center gap-2">
+                            {holeCards.map((card, idx) => (
+                              <div key={idx}>{renderCard(card, player.id !== currentPlayerId && player.isFolded, 'sm')}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-center gap-3">
+                {winnerInfo.endType === 'game' && (
+                  <Button
+                    onClick={() => router.push('/setup')}
+                    size="lg"
+                    disabled={nextRoundInFlight}
+                    className="border border-white/10 bg-white/10 font-bold text-white hover:bg-white/15"
+                  >
+                    返回开局设置
+                  </Button>
+                )}
+                <Button
+                  onClick={() => void handleNextRound(winnerInfo.gameId)}
+                  size="lg"
+                  disabled={nextRoundInFlight}
+                  className="flex-1 bg-gradient-to-r from-yellow-600 to-yellow-500 font-black text-black shadow-lg shadow-yellow-900/40 hover:from-yellow-500 hover:to-yellow-400"
+                >
+                  {nextRoundInFlight
+                    ? winnerInfo.endType === 'game'
+                      ? '重置中...'
+                      : '开局中...'
+                    : winnerInfo.endType === 'game'
+                      ? '开始新一整局'
+                      : '开始下一局'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showConsole && (
+          <div className="fixed inset-3 z-40 xl:hidden">
+            <Card className="flex h-full flex-col overflow-hidden border-white/10 bg-slate-950/95 shadow-2xl backdrop-blur-xl">
+              <div className="flex items-center justify-between border-b border-white/10 bg-black/20 px-4 py-3">
+                <div className="flex items-center gap-2 text-white">
+                  <Terminal className="h-4 w-4 text-emerald-300" />
+                  <h2 className="text-sm font-bold">游戏日志</h2>
+                  <span className="font-mono text-xs text-white/35">({consoleLogs.length})</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setConsoleLogs([])}
+                    className="h-7 text-xs text-white/55 hover:bg-white/10 hover:text-white"
+                  >
+                    清空
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowConsole(false)}
+                    className="h-7 text-xs text-white/55 hover:bg-white/10 hover:text-white"
+                  >
+                    关闭
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex-1 space-y-3 overflow-y-auto p-4 font-mono text-xs">
+                {consoleLogs.length === 0 ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-500">
+                    <Terminal className="h-8 w-8 opacity-20" />
+                    <p>暂无日志记录</p>
+                  </div>
+                ) : (
+                  consoleLogs.map(log => (
+                    <div
+                      key={log.id}
+                      className={`relative border-l-2 pl-3 py-1 ${
+                        log.type === 'action'
+                          ? 'border-blue-500 bg-blue-500/5 text-blue-200'
+                          : log.type === 'phase'
+                            ? 'border-green-500 bg-green-500/5 text-green-200'
+                            : log.type === 'pot'
+                              ? 'border-yellow-500 bg-yellow-500/5 text-yellow-200'
+                              : log.type === 'error'
+                                ? 'border-red-500 bg-red-500/5 text-red-200'
+                                : 'border-slate-600 text-slate-400'
+                      }`}
+                    >
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex items-center justify-between text-[10px] opacity-70">
+                          <span>{log.timestamp}</span>
+                          <span className="font-bold">{getLogLabel(log.type)}</span>
+                        </div>
+                        <div className="leading-relaxed break-words">
+                          {log.playerName ? `[${log.playerName}] ` : ''}
+                          {log.message}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+                <div ref={mobileConsoleEndRef} />
+              </div>
+            </Card>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
