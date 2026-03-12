@@ -2,6 +2,8 @@ import { Player, GameState, GameHistoryEvent } from '../types';
 
 // Node.js 18+ has built-in fetch
 
+const DEFAULT_COZE_TIMEOUT_MS = 120000;
+
 export class BotService {
   async getDecision(
     state: GameState,
@@ -34,7 +36,7 @@ export class BotService {
     console.log('=====================================\n');
 
     const projectId = botPlayer.botId || '7615209749759426602';
-    const apiUrl = 'https://rz2qynsv9r.coze.site/stream_run';
+    const apiUrl = botPlayer.apiUrl || 'https://rz2qynsv9r.coze.site/stream_run';
 
     const payload = {
       content: {
@@ -54,10 +56,11 @@ export class BotService {
       project_id: projectId,
     };
 
-    console.log(`📡 Bot ${botPlayer.name} calling Coze API...`);
+    console.log(`📡 Bot ${botPlayer.name}: ${projectId} calling Coze API...`);
 
+    const timeoutMs = this.getCozeTimeoutMs();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(apiUrl, {
@@ -83,11 +86,22 @@ export class BotService {
       
       return parsed;
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`Coze request timeout after ${timeoutMs}ms`);
+      }
       console.error(`❌ Bot ${botPlayer.name} decision failed:`, error);
       throw error;
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  private getCozeTimeoutMs(): number {
+    const value = Number(process.env.COZE_REQUEST_TIMEOUT_MS ?? '');
+    if (!Number.isFinite(value) || value <= 0) {
+      return DEFAULT_COZE_TIMEOUT_MS;
+    }
+    return Math.floor(value);
   }
 
   private parseCozeResponse(responseText: string): unknown {
