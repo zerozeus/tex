@@ -983,7 +983,7 @@ export default function TexasHoldem() {
                 </div>
               </div>
               <h1 className="text-3xl font-bold text-white mb-2">德州扑克</h1>
-              <p className="text-gray-300 mb-6">Texas Hold'em</p>
+              <p className="text-gray-300 mb-6">Texas Hold&apos;em</p>
               <p className="text-gray-400 mb-8">
                 欢迎来到德州扑克游戏！<br />
                 点击下方按钮开始游戏设置
@@ -1025,10 +1025,10 @@ export default function TexasHoldem() {
   function getSeatPositions(seatCount: number): Array<{ leftPct: number; topPct: number }> {
     const layout =
       seatCount >= 8
-        ? { rx: 42, ry: 34, bottom: 86, top: 13 }
+        ? { rx: 42, ry: 28, bottom: 88, top: 12 }
         : seatCount >= 6
-          ? { rx: 40, ry: 32, bottom: 84, top: 14 }
-          : { rx: 38, ry: 30, bottom: 82, top: 16 };
+          ? { rx: 40, ry: 26, bottom: 86, top: 14 }
+          : { rx: 38, ry: 24, bottom: 84, top: 16 };
 
     if (seatCount === 2) {
       return [
@@ -1068,10 +1068,7 @@ export default function TexasHoldem() {
   const seatedPlayers = rotatePlayers(gameState.players, currentPlayerId);
   const seatCount = seatedPlayers.length;
   const seatPositions = getSeatPositions(seatCount);
-  const seatCardClass =
-    seatCount >= 8 ? 'w-36 xl:w-40' : seatCount >= 6 ? 'w-40 xl:w-44' : seatCount >= 4 ? 'w-44 xl:w-48' : 'w-52';
-  const tableArenaHeightClass =
-    seatCount >= 8 ? 'min-h-[620px] lg:min-h-[680px] xl:min-h-[740px]' : seatCount >= 6 ? 'min-h-[580px] lg:min-h-[640px] xl:min-h-[700px]' : 'min-h-[520px] lg:min-h-[600px] xl:min-h-[660px]';
+  const seatCardClass = '';
   const currentTurnPlayer = gameState.players[gameState.currentPlayerIndex];
   const myPlayer = gameState.players.find(player => player.id === currentPlayerId) ?? seatedPlayers[0];
   const activePlayers = gameState.players.filter(player => !player.isFolded);
@@ -1118,67 +1115,117 @@ export default function TexasHoldem() {
   function renderSeatCard(player: Player, variant: 'table' | 'compact') {
     const isMe = player.id === currentPlayerId;
     const hiddenCards = !isMe && (!revealOthers || player.isFolded);
-    const cardSize: 'sm' = 'sm';
-    const cardBgClass = isMe 
-      ? 'bg-slate-950/90 border-amber-400/40' 
-      : player.isCurrent 
-        ? 'bg-slate-950/85 border-emerald-400/50' 
-        : 'bg-slate-950/70 border-white/10';
-    const avatarClass = player.isBot ? 'bg-fuchsia-950 text-fuchsia-200' : 'bg-sky-950 text-sky-200';
+    const cardSize = 'sm' as const;
     const isCompact = variant === 'compact';
+    
+    // 基础状态颜色
+    const statusColor = player.isCurrent 
+      ? 'border-emerald-400/60 bg-emerald-500/10 shadow-[0_0_15px_rgba(52,211,153,0.2)]' 
+      : player.isFolded 
+        ? 'border-white/5 bg-white/5 opacity-50 grayscale' 
+        : 'border-white/10 bg-slate-900/60';
 
-    return (
-      <Card
-        className={`relative overflow-visible border shadow-xl backdrop-blur-sm transition-all ${cardBgClass} ${
-          player.isCurrent ? 'ring-2 ring-emerald-300/60 ring-offset-0' : ''
-        } ${player.isFolded ? 'opacity-45 grayscale' : ''}`}
-      >
-        <div className={`flex items-center justify-between gap-2 ${isCompact ? 'p-2.5' : 'p-3'}`}>
-          <div className="flex min-w-0 items-center gap-2">
-            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-white/15 ${avatarClass}`}>
-              {player.isBot ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
-            </div>
+    const avatarClass = player.isBot ? 'bg-fuchsia-900/50 text-fuchsia-200' : 'bg-sky-900/50 text-sky-200';
 
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="max-w-[88px] truncate text-sm font-bold text-white">{player.name}</span>
-                {player.isDealer && <Badge variant="secondary" className="h-4 px-1.5 text-[9px] font-bold bg-white text-black">D</Badge>}
-                {isMe && <Badge variant="default" className="h-4 px-1.5 text-[9px] bg-sky-500 text-white">你</Badge>}
+    if (!isCompact) {
+      return (
+        <div className={`flex flex-col items-center gap-2 transition-all duration-300 ${player.isCurrent ? 'scale-105' : ''}`}>
+          {/* 上方：下注区域 */}
+          <div className="h-6 flex items-end justify-center">
+             {player.bet > 0 && (
+              <div className="flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-400 px-2 py-0.5 text-[10px] font-black text-slate-950 shadow-lg animate-in fade-in zoom-in">
+                <Coins className="h-2.5 w-2.5" />
+                <span>{player.bet}</span>
               </div>
-              <div className="mt-1 flex items-center gap-1 text-[11px] text-amber-200">
-                <Coins className="h-3 w-3 shrink-0" />
-                <span className="font-mono font-bold">{player.chips}</span>
-                <span className="text-white/35">·</span>
-                <span className={player.isCurrent ? 'text-emerald-300' : 'text-white/70'}>
-                  {player.isCurrent ? '行动中' : player.isFolded ? '已弃牌' : player.isAllIn ? '已全押' : '在局'}
-                </span>
+            )}
+             {player.isAllIn && (
+              <div className={`rounded-full bg-red-600 px-2 py-0.5 text-[9px] font-black tracking-wider text-white shadow-lg animate-pulse ${player.bet > 0 ? 'ml-1' : ''}`}>
+                ALL IN
               </div>
-            </div>
-          </div>
-
-          <div className="flex shrink-0 items-center -space-x-2">
-            {player.cards.length > 0 ? (
-              player.cards.map((card, index) => (
-                <div key={index} className={`${index === 0 ? '-rotate-6' : 'rotate-6'} transition-transform duration-200 hover:-translate-y-1`}>
-                  {renderCard(card, hiddenCards, cardSize)}
-                </div>
-              ))
-            ) : (
-              <div className="h-14 w-10 opacity-0" />
             )}
           </div>
-        </div>
 
-        {player.bet > 0 && (
-          <div className="absolute -right-2 -top-2 z-20 flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-300 px-2 py-0.5 text-[11px] font-black text-slate-950 shadow-lg">
-            <Coins className="h-3 w-3" />
-            <span>{player.bet}</span>
+          {/* 下方：信息+手牌 左右布局 */}
+          <div className={`flex items-center gap-3 rounded-full border py-1.5 pl-2 pr-4 backdrop-blur-md transition-colors ${statusColor}`}>
+            {/* 左侧：玩家信息 */}
+            <div className="flex items-center gap-2">
+               {/* 头像 */}
+              <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 ${avatarClass}`}>
+                {player.isBot ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
+              </div>
+
+              {/* 名字和筹码 */}
+              <div className="flex flex-col leading-tight min-w-[50px]">
+                <div className="flex items-center gap-1">
+                  <span className="max-w-[70px] truncate text-[11px] font-bold text-white">{player.name}</span>
+                  {player.isDealer && <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white text-[9px] font-black text-black">D</span>}
+                </div>
+                <div className="flex items-center gap-1 text-[10px] font-bold text-amber-300/90">
+                  <Coins className="h-2.5 w-2.5" />
+                  <span className="font-mono">{player.chips}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 右侧：手牌 */}
+            <div className="flex -space-x-3 drop-shadow-lg pl-2 border-l border-white/10">
+              {player.cards.length > 0 ? (
+                player.cards.map((card, index) => (
+                  <div 
+                    key={index} 
+                    className={`transition-transform duration-300 ${
+                      index === 0 ? '-rotate-3 hover:-translate-x-1' : 'rotate-3 hover:translate-x-1'
+                    } hover:-translate-y-2 origin-bottom`}
+                  >
+                    {renderCard(card, hiddenCards, cardSize)}
+                  </div>
+                ))
+              ) : (
+                <div className="flex gap-1">
+                  <div className="h-10 w-7 rounded border border-white/5 bg-white/5" />
+                  <div className="h-10 w-7 rounded border border-white/5 bg-white/5" />
+                </div>
+              )}
+            </div>
           </div>
-        )}
+        </div>
+      );
+    }
 
-        {player.isAllIn && (
-          <div className="absolute left-1/2 top-1/2 z-30 -translate-x-1/2 -translate-y-1/2 rounded-full border border-red-300/50 bg-red-500/90 px-3 py-1 text-[10px] font-black tracking-[0.25em] text-white shadow-lg">
-            ALL IN
+    // 移动端/紧凑视图保持原有风格但优化尺寸
+    return (
+      <Card
+        className={`relative overflow-visible border shadow-xl backdrop-blur-sm transition-all ${
+          isMe ? 'bg-slate-950/90 border-amber-400/40' : statusColor
+        } ${player.isCurrent ? 'ring-2 ring-emerald-300/60' : ''}`}
+      >
+        <div className="flex items-center justify-between gap-2 p-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/15 ${avatarClass}`}>
+              {player.isBot ? <Bot className="h-3.5 w-3.5" /> : <User className="h-3.5 w-3.5" />}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1">
+                <span className="truncate text-xs font-bold text-white">{player.name}</span>
+                {isMe && <Badge className="h-3 px-1 text-[8px] bg-sky-500">你</Badge>}
+              </div>
+              <div className="flex items-center gap-1 text-[10px] text-amber-200">
+                <Coins className="h-2.5 w-2.5" />
+                <span className="font-mono">{player.chips}</span>
+              </div>
+            </div>
+          </div>
+          <div className="flex -space-x-3">
+            {player.cards.map((card, index) => (
+              <div key={index} className="scale-75 origin-right">
+                {renderCard(card, hiddenCards, cardSize)}
+              </div>
+            ))}
+          </div>
+        </div>
+        {player.bet > 0 && (
+          <div className="absolute -right-1 -top-1 flex items-center gap-0.5 rounded-full bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-slate-950 shadow-md">
+            {player.bet}
           </div>
         )}
       </Card>
@@ -1191,10 +1238,10 @@ export default function TexasHoldem() {
     'transition-[transform,background-color,color] duration-150 ease-out active:translate-y-px active:scale-[0.97] disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-35 disabled:saturate-0 disabled:brightness-75';
 
   return (
-    <div className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(22,163,74,0.18),_transparent_28%),linear-gradient(180deg,_#0f172a_0%,_#10241d_48%,_#07120d_100%)] text-white">
-      <div className="mx-auto flex min-h-screen max-w-[1700px] flex-col gap-4 px-3 py-3 md:px-4 xl:px-5">
-        <div className="rounded-[28px] border border-white/10 bg-black/25 px-4 py-4 shadow-[0_20px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+    <div className="h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(22,163,74,0.18),_transparent_28%),linear-gradient(180deg,_#0f172a_0%,_#10241d_48%,_#07120d_100%)] text-white">
+      <div className="mx-auto flex h-full w-full flex-col gap-1 px-2 py-2 md:gap-2 xl:px-4">
+        <div className="shrink-0 rounded-xl border border-white/10 bg-black/25 px-3 py-1.5 shadow-[0_20px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+          <div className="flex flex-col gap-1.5 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-2 md:gap-3">
               <Button
                 variant="outline"
@@ -1268,377 +1315,16 @@ export default function TexasHoldem() {
           </div>
         )}
 
-        <div className="grid flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="flex min-h-0 flex-col gap-4">
-            <Card className={`${shellCardClass} overflow-hidden`}>
-              <div className="border-b border-white/10 px-4 py-4 lg:px-6">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Table Flow</div>
-                    <h2 className="mt-1 text-2xl font-black text-white">
-                      {isMyTurn ? '轮到你做决定' : `${currentTurnPlayer?.name ?? '未知玩家'} 正在行动`}
-                    </h2>
-                    <p className="mt-1 text-sm text-white/60">
-                      {gameState.phase === 'showdown'
-                        ? `摊牌阶段${showdownCountdown > 0 ? `，${showdownCountdown}s 后自动结算` : '，等待结算'}`
-                        : gameState.phase === 'completed' && isFoldResultPending
-                          ? `对手弃牌，${resultRevealCountdown}s 后展示结果`
-                          : isMyTurn
-                            ? `你当前还需跟注 ${pendingCallAmount}，最小加注增量 ${gameState.minRaise || gameState.settings.bigBlind}`
-                            : `关注右侧脉络面板，查看本手下注推进`}
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-[0.18em] text-white/45">你的位置</div>
-                      <div className="mt-1 text-sm font-bold text-white">{myPlayer?.isDealer ? '庄位' : '非庄位'}</div>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-[0.18em] text-white/45">你的筹码</div>
-                      <div className="mt-1 font-mono text-sm font-bold text-amber-100">{myPlayer?.chips ?? 0}</div>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-[0.18em] text-white/45">你本轮下注</div>
-                      <div className="mt-1 font-mono text-sm font-bold text-white">{myPlayer?.bet ?? 0}</div>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-[0.18em] text-white/45">待跟注</div>
-                      <div className="mt-1 font-mono text-sm font-bold text-emerald-100">{pendingCallAmount}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3 sm:p-4 lg:p-5">
-                <div className={`relative overflow-hidden rounded-[34px] border border-white/10 bg-[#1c4332] ${tableArenaHeightClass}`}>
-                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,179,132,0.35),_rgba(14,44,33,0.96)_72%)]" />
-                  <div className="absolute inset-[5%] rounded-[999px] border-[18px] border-[#60472f] bg-black/10 shadow-[inset_0_0_80px_rgba(0,0,0,0.22)]" />
-                  <div className="absolute inset-[9%] rounded-[999px] border border-white/10 bg-[radial-gradient(circle_at_center,_rgba(34,197,94,0.18),_rgba(0,0,0,0)_70%)]" />
-                  <div className="absolute inset-x-10 top-4 flex justify-between text-[10px] uppercase tracking-[0.35em] text-white/40">
-                    <span>Dealer Orbit</span>
-                    <span>Side Pressure</span>
-                  </div>
-
-                  {isShowdownPending && (
-                    <div className="absolute left-1/2 top-6 z-30 -translate-x-1/2 rounded-full border border-white/10 bg-black/60 px-5 py-2 shadow-lg backdrop-blur-md">
-                      <span className="font-bold text-white">
-                        摊牌中{showdownCountdown > 0 ? `，${showdownCountdown}s 后结算` : '，结算中...'}
-                      </span>
-                    </div>
-                  )}
-                  {isFoldResultPending && (
-                    <div className="absolute left-1/2 top-6 z-30 -translate-x-1/2 rounded-full border border-white/10 bg-black/60 px-5 py-2 shadow-lg backdrop-blur-md">
-                      <span className="font-bold text-white">
-                        对手弃牌，{resultRevealCountdown}s 后展示结果
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="relative z-10 h-full md:hidden overflow-y-auto p-4">
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      {seatedPlayers.map(player => (
-                        <div key={player.id}>{renderSeatCard(player, 'compact')}</div>
-                      ))}
-                    </div>
-
-                    <div className="mt-5 rounded-[28px] border border-white/10 bg-black/25 p-4">
-                      <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/45">
-                        <span>Board</span>
-                        <span>Pot {gameState.pot}</span>
-                      </div>
-                      <div className="mt-4 flex justify-center gap-2">
-                        {gameState.communityCards.length === 0
-                          ? [...Array(5)].map((_, index) => (
-                              <div
-                                key={index}
-                                className="flex h-14 w-10 items-center justify-center rounded-md border border-white/10 bg-white/5 text-white/15"
-                              >
-                                ?
-                              </div>
-                            ))
-                          : gameState.communityCards.map((card, index) => (
-                              <div key={index}>{renderCard(card, false, 'sm')}</div>
-                            ))}
-                      </div>
-                      <div className="mt-4 flex items-center justify-center gap-2 rounded-full border border-amber-400/20 bg-amber-300/10 px-4 py-2 text-amber-100">
-                        <Coins className="h-4 w-4" />
-                        <span className="font-mono text-sm font-black">{gameState.pot}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="relative z-10 hidden h-full md:block">
-                    <div className="absolute inset-[4%_5%_6%]">
-                      <div className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-5">
-                        <div className="rounded-[28px] border border-white/10 bg-black/25 px-5 py-3 backdrop-blur-md shadow-xl">
-                          <div className="flex items-center justify-center gap-3">
-                            {gameState.communityCards.length === 0
-                              ? [...Array(5)].map((_, index) => (
-                                  <div
-                                    key={index}
-                                    className="flex h-20 w-14 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/15"
-                                  >
-                                    ?
-                                  </div>
-                                ))
-                              : gameState.communityCards.map((card, index) => (
-                                  <div key={index} className="animate-in fade-in zoom-in duration-500">
-                                    {renderCard(card)}
-                                  </div>
-                                ))}
-                          </div>
-                        </div>
-
-                        <div className="rounded-full border border-amber-400/20 bg-black/35 px-8 py-3 shadow-lg backdrop-blur-sm">
-                          <div className="flex items-center gap-3">
-                            <Coins className="h-6 w-6 text-amber-300" />
-                            <div>
-                              <div className="text-[10px] uppercase tracking-[0.25em] text-white/45">Main Pot</div>
-                              <div className="font-mono text-2xl font-black tracking-wider text-amber-100">{gameState.pot}</div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {seatedPlayers.map((player, seatIndex) => {
-                        const pos = seatPositions[seatIndex];
-                        return (
-                          <div
-                            key={player.id}
-                            className={`${seatCardClass} absolute z-20 transition-all duration-500 ease-out`}
-                            style={{
-                              left: `${pos.leftPct}%`,
-                              top: `${pos.topPct}%`,
-                              transform: 'translate(-50%, -50%)',
-                            }}
-                          >
-                            {renderSeatCard(player, 'table')}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </Card>
-
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_320px]">
-              <Card className={`${shellCardClass} p-4`}>
-                <div className="flex flex-col gap-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.25em] text-white/45">Action Console</div>
-                      <div className="mt-1 text-base font-bold text-white">
-                        {gameState.phase === 'showdown'
-                          ? `摊牌中${showdownCountdown > 0 ? ` · ${showdownCountdown}s` : ''}`
-                          : gameState.phase === 'completed' && isFoldResultPending
-                            ? `结果即将揭示 · ${resultRevealCountdown}s`
-                            : isMyTurn
-                              ? '轮到你了，请选择操作'
-                              : `等待 ${currentTurnPlayer?.name ?? '未知玩家'} 思考中...`}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 text-xs text-white/60">
-                      <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">当前阶段 {getPhaseName(gameState.phase)}</div>
-                      <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">待跟注 {pendingCallAmount}</div>
-                      <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">最小加注 {gameState.minRaise || gameState.settings.bigBlind}</div>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="destructive"
-                      size="default"
-                      onClick={handleFold}
-                      disabled={!isMyTurn}
-                      className={`w-20 border border-red-300/30 bg-gradient-to-b from-red-500 to-red-700 font-black tracking-wide text-white shadow-[0_10px_30px_rgba(0,0,0,0.35)] hover:from-red-400 hover:to-red-600 ${actionButtonBase}`}
-                    >
-                      弃牌
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="default"
-                      onClick={handleCheck}
-                      disabled={!isMyTurn || !canPerformAction('check')}
-                      className={`w-20 border border-slate-200/15 bg-slate-400/10 font-black text-white hover:bg-slate-300/15 ${actionButtonBase}`}
-                    >
-                      过牌
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="default"
-                      onClick={handleCall}
-                      disabled={!isMyTurn || !canPerformAction('call')}
-                      className={`min-w-[110px] border border-emerald-200/25 bg-gradient-to-b from-emerald-500 to-emerald-700 font-black text-white hover:from-emerald-400 hover:to-emerald-600 ${actionButtonBase}`}
-                    >
-                      跟注 {gameState.currentBet > 0 && `(${pendingCallAmount})`}
-                    </Button>
-
-                    <div className="mx-1 hidden h-8 w-px bg-white/10 md:block" />
-
-                    <div className="flex items-center rounded-xl border border-white/5 bg-black/35 p-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() =>
-                          setBetAmount(Math.max(gameState.minRaise || gameState.settings.bigBlind, betAmount - gameState.settings.bigBlind))
-                        }
-                        className={`h-9 w-9 rounded-md text-white/60 hover:bg-white/12 hover:text-white ${adjustButtonBase}`}
-                      >
-                        -
-                      </Button>
-                      <div className="min-w-[72px] px-2 text-center">
-                        <div className="text-[10px] uppercase tracking-[0.2em] text-white/35">筹码量</div>
-                        <span className="font-mono text-lg font-black text-amber-300">{betAmount}</span>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setBetAmount(betAmount + gameState.settings.bigBlind)}
-                        className={`h-9 w-9 rounded-md text-white/60 hover:bg-white/12 hover:text-white ${adjustButtonBase}`}
-                      >
-                        +
-                      </Button>
-                    </div>
-
-                    <Button
-                      variant="default"
-                      size="default"
-                      onClick={gameState.currentBet === 0 ? handleBet : handleRaise}
-                      disabled={!isMyTurn || !canPerformAction(gameState.currentBet === 0 ? 'bet' : 'raise')}
-                      className={`border border-yellow-200/25 bg-gradient-to-b from-yellow-400 to-yellow-600 px-5 font-black text-slate-950 hover:from-yellow-300 hover:to-yellow-500 ${actionButtonBase}`}
-                    >
-                      {gameState.currentBet === 0 ? '下注' : '加注'}
-                    </Button>
-
-                    <Button
-                      variant="default"
-                      size="default"
-                      onClick={handleAllIn}
-                      disabled={!isMyTurn || (myPlayer?.chips ?? 0) <= 0}
-                      className={`border border-red-200/25 bg-gradient-to-b from-red-500 to-red-800 px-5 font-black tracking-wider text-white hover:from-red-400 hover:to-red-700 ${actionButtonBase}`}
-                    >
-                      ALL IN
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-
-              <Card className={`${shellCardClass} p-4 xl:hidden 2xl:block`}>
-                <div className="flex h-full flex-col gap-4">
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.25em] text-white/45">Table Pulse</div>
-                    <div className="mt-1 text-lg font-black">{currentTurnPlayer?.name ?? '未知玩家'} 正在桌上施压</div>
-                    <div className="mt-1 text-sm text-white/60">
-                      最近 {recentHandHistory.length} 条本手事件，方便你在多人桌快速把握节奏。
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/40">当前操作者</div>
-                      <div className="mt-1 font-bold">{currentTurnPlayer?.name ?? '未知'}</div>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/40">你的可跟注</div>
-                      <div className="mt-1 font-mono font-bold text-emerald-100">{pendingCallAmount}</div>
-                    </div>
-                  </div>
-
-                  <div className="flex-1 rounded-3xl border border-white/10 bg-black/20 p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-bold">本手脉络</div>
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-white/35">Hand #{handNumber}</div>
-                    </div>
-                    <div className="mt-3 space-y-2">
-                      {recentHandHistory.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed border-white/10 px-3 py-4 text-sm text-white/45">
-                          暂无本手历史，等待第一步行动。
-                        </div>
-                      ) : (
-                        recentHandHistory.map(event => (
-                          <div key={`${event.sequence}-${event.kind}`} className={`rounded-2xl border px-3 py-2 ${getHistoryAccent(event)}`}>
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-xs font-black tracking-[0.18em]">#{event.sequence}</span>
-                              <span className="text-[10px] uppercase tracking-[0.18em] text-white/45">{event.phase}</span>
-                            </div>
-                            <div className="mt-1 text-sm">{formatHistoryMessage(event)}</div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </Card>
-            </div>
-          </div>
-
-          <aside className="hidden xl:flex xl:min-h-0 xl:flex-col xl:gap-4">
-            <Card className={`${shellCardClass} p-4`}>
-              <div className="text-xs uppercase tracking-[0.25em] text-white/45">Table Pulse</div>
-              <div className="mt-2 text-xl font-black">{currentTurnPlayer?.name ?? '未知玩家'} 正在行动</div>
-              <div className="mt-1 text-sm text-white/60">
-                多人桌信息拆到侧栏后，中央区域只负责座位和牌桌，避免视觉拥堵。
-              </div>
-
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                {[
-                  { label: '仍在局', value: `${activePlayers.length}` },
-                  { label: '总玩家', value: `${seatCount}` },
-                  { label: '机器人', value: `${botCount}` },
-                  { label: '待跟注', value: `${pendingCallAmount}` },
-                ].map(item => (
-                  <div key={item.label} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3">
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-white/35">{item.label}</div>
-                    <div className="mt-1 text-lg font-black text-white">{item.value}</div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-
-            <Card className={`${shellCardClass} flex min-h-0 flex-col p-4`}>
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-xs uppercase tracking-[0.25em] text-white/45">Hand Story</div>
-                  <div className="mt-1 text-lg font-black">本手脉络</div>
-                </div>
-                <Badge variant="secondary" className="border border-white/10 bg-white/5 text-white">
-                  {recentHandHistory.length} 条
-                </Badge>
-              </div>
-              <div className="mt-4 flex-1 space-y-2 overflow-y-auto pr-1">
-                {recentHandHistory.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-white/10 px-3 py-4 text-sm text-white/45">
-                    暂无本手历史，等待第一步行动。
-                  </div>
-                ) : (
-                  recentHandHistory.map(event => (
-                    <div key={`${event.sequence}-${event.kind}`} className={`rounded-2xl border px-3 py-2 ${getHistoryAccent(event)}`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-black tracking-[0.18em]">#{event.sequence}</span>
-                        <span className="text-[10px] uppercase tracking-[0.18em] text-white/45">{event.phase}</span>
-                      </div>
-                      <div className="mt-1 text-sm">{formatHistoryMessage(event)}</div>
-                      {!!event.communityCards?.length && (
-                        <div className="mt-1 text-[11px] text-white/55">
-                          公共牌: {event.communityCards.join(' ')}
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-            </Card>
-
+        <div className="grid flex-1 min-h-0 gap-2 lg:gap-3 lg:grid-cols-[260px_minmax(0,1fr)_280px] xl:grid-cols-[300px_minmax(0,1fr)_320px]">
+          {/* 左侧区域：实时日志 */}
+          <aside className="hidden lg:flex lg:flex-col lg:gap-2 h-full min-h-0">
             {showConsole && (
               <Card className={`${shellCardClass} flex min-h-0 flex-1 flex-col overflow-hidden`}>
-                <div className="flex items-center justify-between border-b border-white/10 bg-black/20 px-4 py-3">
+                <div className="flex items-center justify-between border-b border-white/10 bg-black/20 px-3 py-2">
                   <div className="flex items-center gap-2 text-white">
-                    <Terminal className="h-4 w-4 text-emerald-300" />
-                    <h2 className="text-sm font-bold">实时日志</h2>
-                    <span className="font-mono text-xs text-white/35">({consoleLogs.length})</span>
+                    <Terminal className="h-3.5 w-3.5 text-emerald-300" />
+                    <h2 className="text-xs font-bold">实时日志</h2>
+                    <span className="font-mono text-[10px] text-white/35">({consoleLogs.length})</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <Button
@@ -1699,6 +1385,306 @@ export default function TexasHoldem() {
                 </div>
               </Card>
             )}
+          </aside>
+
+          {/* 中间区域：游戏桌 + Action Console */}
+          <div className="flex min-h-0 flex-col gap-2 h-full">
+            <div className="flex-1 flex flex-col gap-2 relative min-h-0 justify-center">
+              {/* 游戏桌区域 */}
+              <Card className={`${shellCardClass} flex-1 overflow-hidden relative max-h-[600px] xl:max-h-[720px] m-auto w-full`}>
+                <div className="absolute inset-0 p-2 sm:p-3">
+                  <div className="relative h-full w-full overflow-hidden rounded-[24px] border border-white/10 bg-[#1c4332]">
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(99,179,132,0.35),_rgba(14,44,33,0.96)_72%)]" />
+                    <div className="absolute inset-[5%] rounded-[999px] border-[18px] border-[#60472f] bg-black/10 shadow-[inset_0_0_80px_rgba(0,0,0,0.22)]" />
+                    <div className="absolute inset-[9%] rounded-[999px] border border-white/10 bg-[radial-gradient(circle_at_center,_rgba(34,197,94,0.18),_rgba(0,0,0,0)_70%)]" />
+                    <div className="absolute inset-x-10 top-4 flex justify-between text-[10px] uppercase tracking-[0.35em] text-white/40">
+                      <span>Dealer Orbit</span>
+                      <span>Side Pressure</span>
+                    </div>
+
+                    {isShowdownPending && (
+                      <div className="absolute left-1/2 top-6 z-30 -translate-x-1/2 rounded-full border border-white/10 bg-black/60 px-5 py-2 shadow-lg backdrop-blur-md">
+                        <span className="font-bold text-white">
+                          摊牌中{showdownCountdown > 0 ? `，${showdownCountdown}s 后结算` : '，结算中...'}
+                        </span>
+                      </div>
+                    )}
+                    {isFoldResultPending && (
+                      <div className="absolute left-1/2 top-6 z-30 -translate-x-1/2 rounded-full border border-white/10 bg-black/60 px-5 py-2 shadow-lg backdrop-blur-md">
+                        <span className="font-bold text-white">
+                          对手弃牌，{resultRevealCountdown}s 后展示结果
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="relative z-10 h-full md:hidden overflow-y-auto p-4">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {seatedPlayers.map(player => (
+                          <div key={player.id}>{renderSeatCard(player, 'compact')}</div>
+                        ))}
+                      </div>
+
+                      <div className="mt-5 rounded-[28px] border border-white/10 bg-black/25 p-4">
+                        <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/45">
+                          <span>Board</span>
+                          <span>Pot {gameState.pot}</span>
+                        </div>
+                        <div className="mt-4 flex justify-center gap-2">
+                          {gameState.communityCards.length === 0
+                            ? [...Array(5)].map((_, index) => (
+                                <div
+                                  key={index}
+                                  className="flex h-14 w-10 items-center justify-center rounded-md border border-white/10 bg-white/5 text-white/15"
+                                >
+                                  ?
+                                </div>
+                              ))
+                            : gameState.communityCards.map((card, index) => (
+                                <div key={index}>{renderCard(card, false, 'sm')}</div>
+                              ))}
+                        </div>
+                        <div className="mt-4 flex items-center justify-center gap-2 rounded-full border border-amber-400/20 bg-amber-300/10 px-4 py-2 text-amber-100">
+                          <Coins className="h-4 w-4" />
+                          <span className="font-mono text-sm font-black">{gameState.pot}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="absolute inset-0 z-10 hidden md:block">
+                      <div className="absolute inset-[4%_5%_6%]">
+                        <div className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-5">
+                          <div className="rounded-[28px] border border-white/10 bg-black/25 px-5 py-3 backdrop-blur-md shadow-xl">
+                            <div className="flex items-center justify-center gap-3">
+                              {gameState.communityCards.length === 0
+                                ? [...Array(5)].map((_, index) => (
+                                    <div
+                                      key={index}
+                                      className="flex h-20 w-14 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/15"
+                                    >
+                                      ?
+                                    </div>
+                                  ))
+                                : gameState.communityCards.map((card, index) => (
+                                    <div key={index} className="animate-in fade-in zoom-in duration-500">
+                                      {renderCard(card)}
+                                    </div>
+                                  ))}
+                            </div>
+                          </div>
+
+                          <div className="rounded-full border border-amber-400/20 bg-black/35 px-8 py-3 shadow-lg backdrop-blur-sm">
+                            <div className="flex items-center gap-3">
+                              <Coins className="h-6 w-6 text-amber-300" />
+                              <div>
+                                <div className="text-[10px] uppercase tracking-[0.25em] text-white/45">Main Pot</div>
+                                <div className="font-mono text-2xl font-black tracking-wider text-amber-100">{gameState.pot}</div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {seatedPlayers.map((player, seatIndex) => {
+                          const pos = seatPositions[seatIndex];
+                          return (
+                            <div
+                              key={player.id}
+                              className={`${seatCardClass} absolute z-20 transition-all duration-500 ease-out`}
+                              style={{
+                                left: `${pos.leftPct}%`,
+                                top: `${pos.topPct}%`,
+                                transform: 'translate(-50%, -50%)',
+                              }}
+                            >
+                              {renderSeatCard(player, 'table')}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Action Console (Moved Inside Table) */}
+                    <div className="absolute bottom-0 left-0 right-0 z-30 flex flex-col items-center justify-end p-4 pointer-events-none">
+                      <div className="pointer-events-auto flex flex-col gap-4 w-full max-w-3xl items-center">
+                        <div className="flex flex-wrap items-center justify-between gap-3 lg:hidden bg-black/60 backdrop-blur-md rounded-xl p-3 border border-white/10 w-full">
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.25em] text-white/45">Action Console</div>
+                            <div className="mt-1 text-base font-bold text-white">
+                              {gameState.phase === 'showdown'
+                                ? `摊牌中${showdownCountdown > 0 ? ` · ${showdownCountdown}s` : ''}`
+                                : gameState.phase === 'completed' && isFoldResultPending
+                                  ? `结果即将揭示 · ${resultRevealCountdown}s`
+                                  : isMyTurn
+                                    ? '轮到你了，请选择操作'
+                                    : `等待 ${currentTurnPlayer?.name ?? '未知玩家'} 思考中...`}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 text-xs text-white/60">
+                            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">当前阶段 {getPhaseName(gameState.phase)}</div>
+                            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">待跟注 {pendingCallAmount}</div>
+                            <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5">最小加注 {gameState.minRaise || gameState.settings.bigBlind}</div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-center gap-2 bg-black/40 backdrop-blur-sm p-2 rounded-2xl border border-white/5 shadow-2xl">
+                          <Button
+                            variant="destructive"
+                            size="default"
+                            onClick={handleFold}
+                            disabled={!isMyTurn}
+                            className={`w-20 border border-red-300/30 bg-gradient-to-b from-red-500 to-red-700 font-black tracking-wide text-white shadow-[0_10px_30px_rgba(0,0,0,0.35)] hover:from-red-400 hover:to-red-600 ${actionButtonBase}`}
+                          >
+                            弃牌
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="default"
+                            onClick={handleCheck}
+                            disabled={!isMyTurn || !canPerformAction('check')}
+                            className={`w-20 border border-slate-200/15 bg-slate-400/10 font-black text-white hover:bg-slate-300/15 ${actionButtonBase}`}
+                          >
+                            过牌
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="default"
+                            onClick={handleCall}
+                            disabled={!isMyTurn || !canPerformAction('call')}
+                            className={`min-w-[110px] border border-emerald-200/25 bg-gradient-to-b from-emerald-500 to-emerald-700 font-black text-white hover:from-emerald-400 hover:to-emerald-600 ${actionButtonBase}`}
+                          >
+                            跟注 {gameState.currentBet > 0 && `(${pendingCallAmount})`}
+                          </Button>
+
+                          <div className="mx-1 hidden h-8 w-px bg-white/10 md:block" />
+
+                          <div className="flex items-center rounded-xl border border-white/5 bg-black/35 p-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() =>
+                                setBetAmount(Math.max(gameState.minRaise || gameState.settings.bigBlind, betAmount - gameState.settings.bigBlind))
+                              }
+                              className={`h-9 w-9 rounded-md text-white/60 hover:bg-white/12 hover:text-white ${adjustButtonBase}`}
+                            >
+                              -
+                            </Button>
+                            <div className="min-w-[72px] px-2 text-center">
+                              <div className="text-[10px] uppercase tracking-[0.2em] text-white/35">筹码量</div>
+                              <span className="font-mono text-lg font-black text-amber-300">{betAmount}</span>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setBetAmount(betAmount + gameState.settings.bigBlind)}
+                              className={`h-9 w-9 rounded-md text-white/60 hover:bg-white/12 hover:text-white ${adjustButtonBase}`}
+                            >
+                              +
+                            </Button>
+                          </div>
+
+                          <Button
+                            variant="default"
+                            size="default"
+                            onClick={gameState.currentBet === 0 ? handleBet : handleRaise}
+                            disabled={!isMyTurn || !canPerformAction(gameState.currentBet === 0 ? 'bet' : 'raise')}
+                            className={`border border-yellow-200/25 bg-gradient-to-b from-yellow-400 to-yellow-600 px-5 font-black text-slate-950 hover:from-yellow-300 hover:to-yellow-500 ${actionButtonBase}`}
+                          >
+                            {gameState.currentBet === 0 ? '下注' : '加注'}
+                          </Button>
+
+                          <Button
+                            variant="default"
+                            size="default"
+                            onClick={handleAllIn}
+                            disabled={!isMyTurn || (myPlayer?.chips ?? 0) <= 0}
+                            className={`border border-red-200/25 bg-gradient-to-b from-red-500 to-red-800 px-5 font-black tracking-wider text-white hover:from-red-400 hover:to-red-700 ${actionButtonBase}`}
+                          >
+                            ALL IN
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+
+            </div>
+          </div>
+
+          {/* 右侧区域：Table Pulse + Hand Story */}
+          <aside className="hidden lg:flex lg:flex-col lg:gap-2 h-full min-h-0">
+            <Card className={`${shellCardClass} p-3 shrink-0`}>
+              <div className="text-[10px] uppercase tracking-[0.25em] text-white/45">Table Pulse</div>
+              <div className="mt-1 text-base font-black">{currentTurnPlayer?.name ?? '未知玩家'} 正在行动</div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {[
+                  { label: '仍在局', value: `${activePlayers.length}` },
+                  { label: '总玩家', value: `${seatCount}` },
+                  { label: '机器人', value: `${botCount}` },
+                  { label: '待跟注', value: `${pendingCallAmount}` },
+                ].map(item => (
+                  <div key={item.label} className="rounded-xl border border-white/10 bg-white/5 px-2 py-2">
+                    <div className="text-[9px] uppercase tracking-[0.18em] text-white/35">{item.label}</div>
+                    <div className="mt-0.5 text-sm font-black text-white">{item.value}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card className={`${shellCardClass} flex min-h-0 flex-1 flex-col p-3`}>
+              <div className="flex flex-col gap-3 border-b border-white/10 pb-3 mb-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-[0.25em] text-white/45">Hand Story</div>
+                    <div className="mt-1 text-base font-black">本手脉络</div>
+                  </div>
+                  <Badge variant="secondary" className="border border-white/10 bg-white/5 text-white text-[10px] h-5 px-2">
+                    {recentHandHistory.length} 条
+                  </Badge>
+                </div>
+
+                <div>
+                  <div className="text-sm font-bold text-white mb-1.5">
+                    {gameState.phase === 'showdown'
+                      ? `摊牌中${showdownCountdown > 0 ? ` · ${showdownCountdown}s` : ''}`
+                      : gameState.phase === 'completed' && isFoldResultPending
+                        ? `结果即将揭示 · ${resultRevealCountdown}s`
+                        : isMyTurn
+                          ? '轮到你了，请选择操作'
+                          : `等待 ${currentTurnPlayer?.name ?? '未知玩家'} 思考中...`}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 text-[10px] text-white/60">
+                    <div className="rounded-full border border-white/10 bg-white/5 px-2 py-1">当前阶段 {getPhaseName(gameState.phase)}</div>
+                    <div className="rounded-full border border-white/10 bg-white/5 px-2 py-1">待跟注 {pendingCallAmount}</div>
+                    <div className="rounded-full border border-white/10 bg-white/5 px-2 py-1">最小加注 {gameState.minRaise || gameState.settings.bigBlind}</div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2 flex-1 space-y-2 overflow-y-auto pr-1">
+                {recentHandHistory.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-white/10 px-3 py-4 text-sm text-white/45">
+                    暂无本手历史，等待第一步行动。
+                  </div>
+                ) : (
+                  recentHandHistory.map(event => (
+                    <div key={`${event.sequence}-${event.kind}`} className={`rounded-2xl border px-3 py-2 ${getHistoryAccent(event)}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-black tracking-[0.18em]">#{event.sequence}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em] text-white/45">{event.phase}</span>
+                      </div>
+                      <div className="mt-1 text-sm">{formatHistoryMessage(event)}</div>
+                      {!!event.communityCards?.length && (
+                        <div className="mt-1 text-[11px] text-white/55">
+                          公共牌: {event.communityCards.join(' ')}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
           </aside>
         </div>
 
