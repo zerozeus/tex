@@ -13,6 +13,25 @@ export class BotService {
     return this.normalizeDecision(raw);
   }
 
+  async notifyHandResult(state: GameState): Promise<void> {
+    const bots = state.players.filter((player) => player.isBot);
+    if (bots.length === 0) return;
+
+    await Promise.all(
+      bots.map(async (botPlayer) => {
+        const botToken = botPlayer.botToken;
+        if (!botToken) return;
+
+        if (!botPlayer.sessionId) {
+          botPlayer.sessionId = `session_${botPlayer.id}_${Date.now()}`;
+        }
+
+        const prompt = this.buildHandResultPrompt(state, botPlayer);
+        await this.callCozeNotification(botPlayer, prompt);
+      })
+    );
+  }
+
   private async callCoze(state: GameState, botPlayer: Player): Promise<unknown> {
     const botToken = botPlayer.botToken;
     if (!botToken) {
@@ -91,6 +110,61 @@ export class BotService {
       }
       console.error(`❌ Bot ${botPlayer.name} decision failed:`, error);
       throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async callCozeNotification(botPlayer: Player, prompt: string): Promise<void> {
+    const botToken = botPlayer.botToken;
+    if (!botToken) return;
+
+    const projectId = botPlayer.botId || '7615209749759426602';
+    const apiUrl = botPlayer.apiUrl || 'https://rz2qynsv9r.coze.site/stream_run';
+
+    const payload = {
+      content: {
+        query: {
+          prompt: [
+            {
+              type: 'text',
+              content: {
+                text: prompt,
+              },
+            },
+          ],
+        },
+      },
+      type: 'query',
+      session_id: botPlayer.sessionId,
+      project_id: projectId,
+    };
+
+    const timeoutMs = this.getCozeTimeoutMs();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${botToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`API Error ${response.status}: ${await response.text()}`);
+      }
+
+      await response.text();
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`Coze request timeout after ${timeoutMs}ms`);
+      }
+      console.error(`❌ Bot ${botPlayer.name} result notify failed:`, error);
     } finally {
       clearTimeout(timer);
     }
@@ -234,6 +308,54 @@ ${historyDesc}
   "reason": "简短决策理由",
   "chat": "可选"
 }`;
+  }
+
+  private buildHandResultPrompt(gameState: GameState, botPlayer: Player): string {
+    const boardDesc = gameState.communityCards.length > 0
+      ? gameState.communityCards.map(card => `${card.rank}${card.suit}`).join(', ')
+      : '暂无';
+    const winners = gameState.winners ?? [];
+    const winnersDesc = winners.length > 0
+      ? winners.map((winner) => winner.name).join(', ')
+      : '无';
+    const isWinner = winners.some((winner) => winner.id === botPlayer.id);
+    const settlementReason = gameState.settlementReason ?? 'unknown';
+    const winAmount = gameState.winAmount ?? 0;
+    const botCards = botPlayer.cards.map(card => `${card.rank}${card.suit}`).join(', ');
+
+    const revealShowdown = settlementReason === 'showdown' && gameState.showdownRevealed;
+    const visibleShowdown = revealShowdown
+      ? gameState.players
+        .filter((player) => !player.isFolded)
+        .map((player) => {
+          const cards = player.cards.map(card => `${card.rank}${card.suit}`).join(', ');
+          const summary = gameState.handSummary?.[player.id]?.description;
+          const summaryDesc = summary ? `，牌型 ${summary}` : '';
+          return `- ${player.name}: 手牌 ${cards}${summaryDesc}`;
+        })
+        .join('\n')
+      : '- 未公开他人手牌';
+
+    return `
+你是德州扑克玩家 ${botPlayer.name}。以下为本手结束结果通知，请勿回复或输出任何内容。
+
+【结果摘要】
+- 当前手数: 第 ${gameState.handNumber} 手
+- 结束阶段: ${gameState.phase}
+- 结算原因: ${settlementReason}
+- 公共牌: ${boardDesc}
+- 获胜者: ${winnersDesc}
+- 本手总底池: ${winAmount}
+
+【你的结果】
+- 你的手牌: ${botCards}
+- 你本手总投入: ${botPlayer.totalHandBet}
+- 你当前筹码: ${botPlayer.chips}
+- 你是否获胜: ${isWinner ? '是' : '否'}
+
+【摊牌可见信息】
+${visibleShowdown}
+`;
   }
 
   private formatActionHistory(history: GameHistoryEvent[]): string {

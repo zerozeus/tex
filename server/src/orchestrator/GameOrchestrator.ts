@@ -41,6 +41,8 @@ type Broadcaster = {
 };
 
 export class GameOrchestrator {
+  private handResultNotified = new Map<string, number>();
+
   constructor(
     private engineMap: Map<string, GameEngine>,
     private botService: BotService,
@@ -69,6 +71,7 @@ export class GameOrchestrator {
       }
 
       await this.broadcaster.broadcastGameState(gameId, stateAfter);
+      await this.notifyBotsHandResultIfNeeded(gameId, stateAfter);
       return { success: true };
     });
   }
@@ -114,6 +117,7 @@ export class GameOrchestrator {
       }
 
       await this.broadcaster.broadcastGameState(gameId, stateAfter);
+      await this.notifyBotsHandResultIfNeeded(gameId, stateAfter);
       
       if (stateAfter.phase === 'showdown' && stateAfter.players.every(p => p.isBot)) {
         const settleResult = engine.settleShowdown();
@@ -125,6 +129,7 @@ export class GameOrchestrator {
             console.error('Failed to record bot-only showdown settle to database:', e);
           }
           await this.broadcaster.broadcastGameState(gameId, finalState);
+          await this.notifyBotsHandResultIfNeeded(gameId, finalState);
           return { success: true };
         }
       }
@@ -268,10 +273,24 @@ export class GameOrchestrator {
       }
 
       await this.broadcaster.broadcastGameState(gameId, botStateAfter);
+      await this.notifyBotsHandResultIfNeeded(gameId, botStateAfter);
     }
 
     throw new Error(`bot chain overflow: game=${gameId}`);
   }
+
+  private async notifyBotsHandResultIfNeeded(gameId: string, state: GameState) {
+    if (state.phase !== 'completed') return;
+    if (this.handResultNotified.get(gameId) === state.handNumber) return;
+
+    this.handResultNotified.set(gameId, state.handNumber);
+    try {
+      await this.botService.notifyHandResult(state);
+    } catch (e) {
+      console.error(`Failed to notify bots hand result: game=${gameId}`, e);
+    }
+  }
+
 
 
   private makeFallbackDecision(engine: GameEngine, playerId: string): { action: string; amount?: number } {

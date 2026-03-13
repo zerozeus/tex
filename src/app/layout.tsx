@@ -7,8 +7,7 @@ export const metadata: Metadata = {
     default: 'Lone Star Studio',
     template: '%s | Lone Star Studio',
   },
-  description:
-    'A quiet studio for building agents, workflows, and websites through conversation.',
+  description: ''
 };
 
 export default function RootLayout({
