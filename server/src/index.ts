@@ -121,6 +121,7 @@ app.get('/api/bots', (req, res) => {
     data: AVAILABLE_BOTS.map(bot => ({
       id: bot.id,
       name: bot.name,
+      token: bot.token,
       botId: bot.botId,
       url: bot.url
     }))

@@ -427,7 +427,7 @@ export default function GameSetup() {
                                       onSelect={() => {
                                           updatePlayerConfig(player.id, {
                                             name: bot.name,
-                                            botToken: bot.token ?? '',
+                                            botToken: bot.token ?? player.botToken ?? '',
                                             botId: bot.botId,
                                             apiUrl: bot.url,
                                           });

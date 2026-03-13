@@ -1,6 +1,7 @@
 export interface BotConfig {
   id: string;
   name: string;
+  token: string;
   botId: string;
   url: string;
 }
@@ -9,18 +10,21 @@ export const AVAILABLE_BOTS: BotConfig[] = [
   {
     id: 'mad_dog',
     name: '疯狗',
+    token: 'eyJhbGciOiJSUzI1NiIsImtpZCI6Ijg4OTdjOGE0LTc5ZDEtNDI0My04ZmZmLTRhNjQzNDgwYjRhNCJ9.eyJpc3MiOiJodHRwczovL2FwaS5jb3plLmNuIiwiYXVkIjpbImhwbXZaOWRMQ0plN2l1ZG1FSklkNUlBOHI2RDRxekNrIl0sImV4cCI6ODIxMDI2Njg3Njc5OSwiaWF0IjoxNzczMjkzMDQzLCJzdWIiOiJzcGlmZmU6Ly9hcGkuY296ZS5jbi93b3JrbG9hZF9pZGVudGl0eS9pZDo3NjE2MjMxMjAwMjA1ODk3NzcwIiwic3JjIjoiaW5ib3VuZF9hdXRoX2FjY2Vzc190b2tlbl9pZDo3NjE2MjM1NjI2NzE0NjI4MTQyIn0.QCwGgh0n2hLLrubz4ockpWJ8HF0rgP_mjfVi_nukP2OUC_1w21PAjllzcfk6s0gma30DtE9DbCSwgnnhALjR5L8ZXvSP_RMR96pKm0JUU0HGvc8UhUtLr6W8TQmTo9ZU1Odes2Cjv2WOkx9p-3NWZuWEXxyVfKYHikXSI1CJ-Ybym5XzaffgGC-UN0C6gOxaNzbidcyEXbWeG2hCXwNwPNaGwVxbkozgTtu3SRo-CXC7_sw-X-mrTZ4qC30zF7UeH_BH5K8tXoZle1y4bFEflbu9LstkfPjrkjJ8gCAlukMI1IglhiKi4kw07RbeiFiNX7c2k0dR2RDzLXcYHhGOSg',
     botId: '7616224336663576639',
     url: 'https://gvr48qv2qj.coze.site/stream_run'
   },
   {
     id: 'follow_or_not',
     name: '你跟不跟',
+    token: 'eyJhbGciOiJSUzI1NiIsImtpZCI6Ijg4OTdjOGE0LTc5ZDEtNDI0My04ZmZmLTRhNjQzNDgwYjRhNCJ9.eyJpc3MiOiJodHRwczovL2FwaS5jb3plLmNuIiwiYXVkIjpbImJreEROVkNSdElrRW9BZEFDNDRBZ1M4TW5JZktvVlhoIl0sImV4cCI6ODIxMDI2Njg3Njc5OSwiaWF0IjoxNzczMzEyODgyLCJzdWIiOiJzcGlmZmU6Ly9hcGkuY296ZS5jbi93b3JrbG9hZF9pZGVudGl0eS9pZDo3NjE1MjE1MDAyMjMxNzY3MDgxIiwic3JjIjoiaW5ib3VuZF9hdXRoX2FjY2Vzc190b2tlbl9pZDo3NjE2MzIwODM0MzE5MTU1MjA2In0.TfAtrUGW68W6hJPCLTvUlYBfEvbVoQ_a9qkhggbxtiFW_csco_vzUJG1A2xUkrMAWOrmPOwkEbxD202VHLvlOYpZIoXv7RVhEHggH2BeqVjoJssIzAcbhA57-8ai2W2F_1Fr6kKCmHcx8BQBJ239ILcLFaEjn5PQpQ0Ar_nzG-a6xJMMGgV5skHEnnPGM8lTBv8HBH3mJDrtu0hfI2NzAy3SFvkDQiwCmNjZ_zWVBNIoUSbH0hwXKuJ6_k-q294S3Qv4shqlZHiW2SgvFVgn-Ubvm0ZDNffmPtZMiMZbQQC-bTK10WXqFQ7Bfuja67riur9GHtaMNpysb-P-X0LsdQ',
     botId: '7615209749759426602',
     url: 'https://rz2qynsv9r.coze.site/stream_run'
   },
   {
     id: 'jiancheng_bot',
-    name: '德州小白菜',
+    name: '剑城的bot',
+    token: 'eyJhbGciOiJSUzI1NiIsImtpZCI6Ijg4OTdjOGE0LTc5ZDEtNDI0My04ZmZmLTRhNjQzNDgwYjRhNCJ9.eyJpc3MiOiJodHRwczovL2FwaS5jb3plLmNuIiwiYXVkIjpbIlNpbG16bDN4OHp3VVNTcnhuRTdSSktpblFvc3BzWTg3Il0sImV4cCI6ODIxMDI2Njg3Njc5OSwiaWF0IjoxNzczMzE0NzI0LCJzdWIiOiJzcGlmZmU6Ly9hcGkuY296ZS5jbi93b3JrbG9hZF9pZGVudGl0eS9pZDo3NjE1NjA5MjcyNzQ2OTAxNTM4Iiwic3JjIjoiaW5ib3VuZF9hdXRoX2FjY2Vzc190b2tlbl9pZDo3NjE2MzI4NzQ2OTQ5MTQ4NzI2In0.EDPNSPVQsTCD7Xkb_3dFejRGzWESKztD7ECwwh8Bz6Mc0TevrBzKs9-nUqX5Z78q0SUmvzM4kIP5M6UnfwrUSIKBRj9cViKoKNBTqT5qPiuWk2FilOrBPvuLlzqmdEdfHrFR0gasyR7EVglHMjL05Mm0OwKzVyzOcV4WQ2lIGoxbbAaut3prKPIfATsKK0JbdUEnWaSAqsl17eJnhirbjPRDNxQf_yXDxxJA6Kd3qsyefjPyCTrSwRYc-qLSlp3pcr4fLmYz_Bz8hriqqtwN6iLqI4-MloxIqMrsOda83sbbf5h0yGQ-eaH0V8-5M5nE6xtvIdKsW_dN4CI1nYhRWg',
     botId: '7615606911139954740',
     url: 'https://tt6ym3f4dx.coze.site/stream_run'
   }

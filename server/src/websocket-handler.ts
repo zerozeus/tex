@@ -6,6 +6,14 @@ import { WSMessage, WSClient, GameConfig, PlayerAction } from './types';
 
 const DEBUG_LOG = process.env.POKER_DEBUG === '1';
 
+function getPositiveMsFromEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name] ?? '');
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
 function debugLog(event: string, payload: Record<string, unknown>) {
   if (!DEBUG_LOG) return;
   console.log(`[ws] ${event}`, payload);
@@ -25,10 +33,20 @@ export class WebSocketHandler {
   private wss: WebSocketServer;
   private clients: Map<string, WSClientWithTimers> = new Map();
   private games: Map<string, GameEngine> = new Map();
-  private readonly HEARTBEAT_INTERVAL = 30000; // 30秒
-  private readonly PING_TIMEOUT = 60000; // 60秒超时
+  private readonly HEARTBEAT_INTERVAL: number;
+  private readonly PING_TIMEOUT: number;
 
   constructor(options: WebSocketHandlerOptions) {
+    this.HEARTBEAT_INTERVAL = getPositiveMsFromEnv('WS_HEARTBEAT_INTERVAL_MS', 30000);
+    this.PING_TIMEOUT = Math.max(
+      getPositiveMsFromEnv('WS_PING_TIMEOUT_MS', 90000),
+      this.HEARTBEAT_INTERVAL + 1000
+    );
+    debugLog('heartbeat:config', {
+      heartbeatIntervalMs: this.HEARTBEAT_INTERVAL,
+      pingTimeoutMs: this.PING_TIMEOUT,
+    });
+
     if ('port' in options) {
       this.wss = new WebSocketServer({ port: options.port });
       this.setupServer();
@@ -88,7 +106,7 @@ export class WebSocketHandler {
           
           // 处理 pong 响应
           if (data === 'pong') {
-            debugLog('client:pong', { clientId });
+            debugLog('client:pong', { clientId, mode: 'text' });
             // 收到 pong，清除超时计时器
             if (client.pingTimeout) {
               clearTimeout(client.pingTimeout);
@@ -107,6 +125,15 @@ export class WebSocketHandler {
             data: { message: 'Invalid message format' },
             timestamp: Date.now(),
           });
+        }
+      });
+
+      ws.on('pong', () => {
+        client.lastActivity = Date.now();
+        debugLog('client:pong', { clientId, mode: 'control' });
+        if (client.pingTimeout) {
+          clearTimeout(client.pingTimeout);
+          client.pingTimeout = undefined;
         }
       });
 
@@ -142,15 +169,26 @@ export class WebSocketHandler {
         return;
       }
 
-      try {
-        debugLog('server:ping', { clientId });
-        c.ws.send('ping');
+      // 还在等待上一次 pong，不重复发送，避免挂起多个超时定时器
+      if (c.pingTimeout) {
+        debugLog('server:ping_pending', { clientId });
+        return;
+      }
 
-        // 设置超时
-        c.pingTimeout = setTimeout(() => {
+      try {
+        debugLog('server:ping', { clientId, mode: 'control' });
+        c.ws.ping();
+
+        // 设置超时；仅允许最新一次 ping 的定时器生效
+        const timeoutRef = setTimeout(() => {
+          const latestClient = this.clients.get(clientId);
+          if (!latestClient || latestClient.pingTimeout !== timeoutRef) {
+            return;
+          }
           console.warn(`Client ${clientId} heartbeat timeout, closing connection`);
           this.handleClientDisconnect(clientId);
         }, this.PING_TIMEOUT);
+        c.pingTimeout = timeoutRef;
       } catch (error) {
         console.error(`Failed to send ping to client ${clientId}:`, error);
         this.handleClientDisconnect(clientId);
