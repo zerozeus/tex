@@ -859,9 +859,11 @@ export default function TexasHoldem() {
     switch (action) {
       case 'check':
         return gameState.currentBet === currentPlayer.bet;
-      case 'call':
-        return gameState.currentBet > currentPlayer.bet &&
-               gameState.currentBet - currentPlayer.bet <= currentPlayer.chips;
+      case 'call': {
+        const toCall = gameState.currentBet - currentPlayer.bet;
+        // 支持短码跟注（等价于全押跟注）
+        return toCall > 0 && currentPlayer.chips > 0;
+      }
       case 'bet': {
         if (gameState.currentBet > 0) return false;
         const amount = betAmount || 0;
@@ -1075,6 +1077,8 @@ export default function TexasHoldem() {
   const botCount = gameState.players.filter(player => player.isBot).length;
   const humanCount = gameState.players.length - botCount;
   const pendingCallAmount = myPlayer ? Math.max(0, gameState.currentBet - myPlayer.bet) : 0;
+  const callCommitAmount = Math.min(pendingCallAmount, myPlayer?.chips ?? 0);
+  const isShortStackCall = pendingCallAmount > (myPlayer?.chips ?? 0);
   const recentHandHistory = (gameState.actionHistory ?? []).slice(-8);
   const handNumber = gameState.handNumber ?? 1;
   const shellCardClass = 'border-white/10 bg-slate-950/55 text-white backdrop-blur-xl shadow-[0_24px_80px_rgba(0,0,0,0.35)]';
@@ -1552,7 +1556,11 @@ export default function TexasHoldem() {
                             disabled={!isMyTurn || !canPerformAction('call')}
                             className={`min-w-[110px] border border-emerald-200/25 bg-gradient-to-b from-emerald-500 to-emerald-700 font-black text-white hover:from-emerald-400 hover:to-emerald-600 ${actionButtonBase}`}
                           >
-                            跟注 {gameState.currentBet > 0 && `(${pendingCallAmount})`}
+                            {pendingCallAmount > 0
+                              ? isShortStackCall
+                                ? `跟注(全押 ${callCommitAmount})`
+                                : `跟注 (${pendingCallAmount})`
+                              : '跟注'}
                           </Button>
 
                           <div className="mx-1 hidden h-8 w-px bg-white/10 md:block" />

@@ -23,7 +23,7 @@ export const AVAILABLE_BOTS: BotConfig[] = [
   },
   {
     id: 'jiancheng_bot',
-    name: '剑城的bot',
+    name: '德州小白菜',
     token: 'eyJhbGciOiJSUzI1NiIsImtpZCI6Ijg4OTdjOGE0LTc5ZDEtNDI0My04ZmZmLTRhNjQzNDgwYjRhNCJ9.eyJpc3MiOiJodHRwczovL2FwaS5jb3plLmNuIiwiYXVkIjpbIlNpbG16bDN4OHp3VVNTcnhuRTdSSktpblFvc3BzWTg3Il0sImV4cCI6ODIxMDI2Njg3Njc5OSwiaWF0IjoxNzczMzE0NzI0LCJzdWIiOiJzcGlmZmU6Ly9hcGkuY296ZS5jbi93b3JrbG9hZF9pZGVudGl0eS9pZDo3NjE1NjA5MjcyNzQ2OTAxNTM4Iiwic3JjIjoiaW5ib3VuZF9hdXRoX2FjY2Vzc190b2tlbl9pZDo3NjE2MzI4NzQ2OTQ5MTQ4NzI2In0.EDPNSPVQsTCD7Xkb_3dFejRGzWESKztD7ECwwh8Bz6Mc0TevrBzKs9-nUqX5Z78q0SUmvzM4kIP5M6UnfwrUSIKBRj9cViKoKNBTqT5qPiuWk2FilOrBPvuLlzqmdEdfHrFR0gasyR7EVglHMjL05Mm0OwKzVyzOcV4WQ2lIGoxbbAaut3prKPIfATsKK0JbdUEnWaSAqsl17eJnhirbjPRDNxQf_yXDxxJA6Kd3qsyefjPyCTrSwRYc-qLSlp3pcr4fLmYz_Bz8hriqqtwN6iLqI4-MloxIqMrsOda83sbbf5h0yGQ-eaH0V8-5M5nE6xtvIdKsW_dN4CI1nYhRWg',
     botId: '7615606911139954740',
     url: 'https://tt6ym3f4dx.coze.site/stream_run'
