@@ -187,6 +187,7 @@ export class GameEngine {
       gameId,
       handNumber: 1,
       phase: "preflop",
+      handStartChips: {},
       pot: 0,
       pots: [], // 初始化奖池列表
       currentBet: 0,
@@ -281,6 +282,10 @@ export class GameEngine {
     // 计算底池
     this.gameState.pot = players.reduce((sum, player) => sum + player.bet, 0);
     this.gameState.currentBet = settings.bigBlind;
+    // 记录本手开局筹码（盲注后筹码 + 已投盲注），用于结算阶段恢复净输赢
+    this.gameState.handStartChips = Object.fromEntries(
+      players.map((player) => [player.id, player.chips + player.totalHandBet])
+    );
 
     // 设置当前玩家
     this.gameState.players.forEach((player, index) => {

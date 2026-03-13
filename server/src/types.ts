@@ -51,6 +51,7 @@ export interface GameState {
   handNumber: number;
   phase: 'preflop' | 'flop' | 'turn' | 'river' | 'showdown' | 'completed';
   endType?: 'hand' | 'game';
+  handStartChips?: Record<string, number>; // 本手开始时每位玩家筹码（用于结算展示）
   pot: number;
   pots: { amount: number; eligiblePlayers: string[] }[]; // 奖池列表（主池+边池）
   currentBet: number;
@@ -110,6 +111,7 @@ export interface WSMessage {
 export interface WSClient {
   id: string;
   playerId?: string;
+  playerToken?: string;
   gameId?: string;
   ws: WebSocket;
 }

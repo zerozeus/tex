@@ -2,7 +2,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { Socket } from 'net';
 import { GameEngine } from './game-engine';
-import { WSMessage, WSClient, GameConfig, PlayerAction } from './types';
+import { WSMessage, WSClient, GameConfig, PlayerAction, GameState } from './types';
 
 const DEBUG_LOG = process.env.POKER_DEBUG === '1';
 
@@ -27,17 +27,23 @@ interface WSClientWithTimers extends WSClient {
   heartbeatTimer?: NodeJS.Timeout;
   pingTimeout?: NodeJS.Timeout;
   lastActivity?: number;
+  playerToken?: string;
 }
+
+type ValidatePlayerAuth = (gameId: string, playerId: string, token: string) => boolean;
+type ProjectStateForViewer = (state: GameState, viewerPlayerId?: string) => GameState;
 
 export class WebSocketHandler {
   private wss: WebSocketServer;
   private clients: Map<string, WSClientWithTimers> = new Map();
   private games: Map<string, GameEngine> = new Map();
+  private validatePlayerAuth?: ValidatePlayerAuth;
+  private projectStateForViewer?: ProjectStateForViewer;
   private readonly HEARTBEAT_INTERVAL: number;
   private readonly PING_TIMEOUT: number;
 
   constructor(options: WebSocketHandlerOptions) {
-    this.HEARTBEAT_INTERVAL = getPositiveMsFromEnv('WS_HEARTBEAT_INTERVAL_MS', 30000);
+    this.HEARTBEAT_INTERVAL = getPositiveMsFromEnv('WS_HEARTBEAT_INTERVAL_MS', 10000);
     this.PING_TIMEOUT = Math.max(
       getPositiveMsFromEnv('WS_PING_TIMEOUT_MS', 90000),
       this.HEARTBEAT_INTERVAL + 1000
@@ -74,6 +80,14 @@ export class WebSocketHandler {
         this.wss.emit('connection', ws, request);
       });
     });
+  }
+
+  public configureAccessControl(options: {
+    validatePlayerAuth?: ValidatePlayerAuth;
+    projectStateForViewer?: ProjectStateForViewer;
+  }): void {
+    this.validatePlayerAuth = options.validatePlayerAuth;
+    this.projectStateForViewer = options.projectStateForViewer;
   }
 
   private setupServer(): void {
@@ -237,19 +251,43 @@ export class WebSocketHandler {
   }
 
   private handleJoinGame(clientId: string, data: unknown): void {
-    const payload = data as { gameId: string; playerId: string };
+    const payload = data as { gameId: string; playerId: string; playerToken: string };
     
-    if (!payload.gameId || !payload.playerId) {
-      debugLog('join:invalid', { clientId, payload });
+    if (!payload.gameId || !payload.playerId || !payload.playerToken) {
+      debugLog('join:invalid', {
+        clientId,
+        payload: {
+          gameId: payload.gameId,
+          playerId: payload.playerId,
+          hasToken: Boolean(payload.playerToken),
+        },
+      });
       this.sendToClient(clientId, {
         type: 'error',
-        data: { message: 'Missing gameId or playerId' },
+        data: { message: 'Missing gameId, playerId or playerToken' },
         timestamp: Date.now(),
       });
       return;
     }
 
-    const success = this.joinGame(clientId, payload.gameId, payload.playerId);
+    if (
+      this.validatePlayerAuth &&
+      !this.validatePlayerAuth(payload.gameId, payload.playerId, payload.playerToken)
+    ) {
+      debugLog('join:unauthorized', {
+        clientId,
+        gameId: payload.gameId,
+        playerId: payload.playerId,
+      });
+      this.sendToClient(clientId, {
+        type: 'error',
+        data: { message: 'Invalid player credential' },
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const success = this.joinGame(clientId, payload.gameId, payload.playerId, payload.playerToken);
     
     if (!success) {
       debugLog('join:fail', { clientId, gameId: payload.gameId, playerId: payload.playerId });
@@ -266,6 +304,25 @@ export class WebSocketHandler {
 
   private handlePlayerAction(clientId: string, action: PlayerAction): void {
     debugLog('action:recv', { clientId, gameId: action.gameId, playerId: action.playerId, action: action.action, amount: action.amount ?? null });
+    const client = this.clients.get(clientId);
+    if (!client || !client.gameId || !client.playerId) {
+      this.sendToClient(clientId, {
+        type: 'error',
+        data: { message: 'Client has not joined any game' },
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    if (client.gameId !== action.gameId || client.playerId !== action.playerId) {
+      this.sendToClient(clientId, {
+        type: 'error',
+        data: { message: 'Action rejected: player mismatch' },
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
     const game = this.games.get(action.gameId);
 
     if (!game) {
@@ -319,9 +376,11 @@ export class WebSocketHandler {
       return;
     }
 
+    const client = this.clients.get(clientId);
+    const viewerPlayerId = client?.gameId === gameId ? client.playerId : undefined;
     this.sendToClient(clientId, {
       type: 'game_state',
-      data: game.getGameState(),
+      data: this.getStateForViewer(game, viewerPlayerId),
       timestamp: Date.now(),
     });
   }
@@ -333,7 +392,12 @@ export class WebSocketHandler {
     return game.getGameState().gameId;
   }
 
-  public joinGame(clientId: string, gameId: string, playerId: string): boolean {
+  public joinGame(
+    clientId: string,
+    gameId: string,
+    playerId: string,
+    playerToken: string,
+  ): boolean {
     const client = this.clients.get(clientId);
     const game = this.games.get(gameId);
 
@@ -341,12 +405,30 @@ export class WebSocketHandler {
       return false;
     }
 
+    const duplicatedClients = Array.from(this.clients.values()).filter(
+      (c) =>
+        c.id !== clientId &&
+        c.gameId === gameId &&
+        c.playerId === playerId &&
+        c.playerToken === playerToken,
+    );
+
+    for (const duplicated of duplicatedClients) {
+      this.sendToClient(duplicated.id, {
+        type: 'error',
+        data: { message: '身份已在其他连接登录，当前连接已断开' },
+        timestamp: Date.now(),
+      });
+      this.handleClientDisconnect(duplicated.id);
+    }
+
     client.playerId = playerId;
     client.gameId = gameId;
+    client.playerToken = playerToken;
 
     this.sendToClient(clientId, {
       type: 'game_state',
-      data: game.getGameState(),
+      data: this.getStateForViewer(game, playerId),
       timestamp: Date.now(),
     });
 
@@ -357,22 +439,25 @@ export class WebSocketHandler {
     const game = this.games.get(gameId);
     if (!game) return;
 
-    const gameState = game.getGameState();
-    const message: WSMessage = {
-      type: 'game_update',
-      data: gameState,
-      timestamp: Date.now(),
-    };
-
     let recipients = 0;
     // 发送给所有在游戏中的客户端
     this.clients.forEach((client) => {
       if (client.gameId === gameId) {
         recipients += 1;
-        this.sendToClient(client.id, message);
+        this.sendToClient(client.id, {
+          type: 'game_update',
+          data: this.getStateForViewer(game, client.playerId),
+          timestamp: Date.now(),
+        });
       }
     });
     debugLog('broadcast:game_state', { gameId, recipients });
+  }
+
+  private getStateForViewer(game: GameEngine, viewerPlayerId?: string): GameState {
+    const rawState = game.getGameState();
+    if (!this.projectStateForViewer) return rawState;
+    return this.projectStateForViewer(rawState, viewerPlayerId);
   }
 
   private sendToClient(clientId: string, message: WSMessage): void {

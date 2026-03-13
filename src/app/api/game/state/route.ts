@@ -2,16 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getGameState } from '@/lib/game-utils';
 
 /**
- * GET /api/game/state?gameId=xxx
- * 
+ * /api/game/state
+ *
  * 获取当前游戏状态
- * 
+ *
  * TODO: 请在此实现以下功能：
  * 1. 从数据库或内存中获取游戏状态
  * 2. 返回完整的游戏信息
  * 
  * 请求参数:
  * - gameId: 游戏ID
+ * - playerId/playerToken: 可选，当前 mock 实现不会使用
  * 
  * 响应示例:
  * {
@@ -59,30 +60,48 @@ import { getGameState } from '@/lib/game-utils';
  *   }
  * }
  */
+function buildStateResponse(gameId: string) {
+  const normalizedGameId = gameId.trim();
+  if (!normalizedGameId) {
+    return NextResponse.json(
+      { success: false, error: '缺少游戏ID' },
+      { status: 400 }
+    );
+  }
+
+  const gameState = getGameState(normalizedGameId);
+  if (!gameState) {
+    return NextResponse.json(
+      { success: false, error: '游戏不存在或已过期' },
+      { status: 404 }
+    );
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: gameState,
+  });
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    const gameId = searchParams.get('gameId');
+    const gameId = searchParams.get('gameId') || '';
+    return buildStateResponse(gameId);
+  } catch (error) {
+    console.error('Get game state error:', error);
+    return NextResponse.json(
+      { success: false, error: '获取游戏状态失败' },
+      { status: 500 }
+    );
+  }
+}
 
-    if (!gameId) {
-      return NextResponse.json(
-        { success: false, error: '缺少游戏ID' },
-        { status: 400 }
-      );
-    }
-
-    const gameState = getGameState(gameId);
-    if (!gameState) {
-      return NextResponse.json(
-        { success: false, error: '游戏不存在或已过期' },
-        { status: 404 }
-      );
-    }
-
-    return NextResponse.json({
-      success: true,
-      data: gameState,
-    });
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json() as { gameId?: unknown };
+    const gameId = typeof body.gameId === 'string' ? body.gameId : '';
+    return buildStateResponse(gameId);
   } catch (error) {
     console.error('Get game state error:', error);
     return NextResponse.json(

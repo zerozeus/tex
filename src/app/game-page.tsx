@@ -52,6 +52,7 @@ interface GameState {
   handNumber?: number;
   phase: 'preflop' | 'flop' | 'turn' | 'river' | 'showdown' | 'completed';
   endType?: 'hand' | 'game';
+  handStartChips?: Record<string, number>;
   pot: number;
   pots?: { amount: number; eligiblePlayers: string[] }[]; // 奖池列表
   currentBet: number;
@@ -89,18 +90,21 @@ export default function TexasHoldem() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const gameId = searchParams.get('gameId');
+  const currentPlayerId = searchParams.get('playerId') || '';
+  const playerToken = searchParams.get('playerToken') || '';
   const DEBUG = process.env.NEXT_PUBLIC_POKER_DEBUG === '1';
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [betAmount, setBetAmount] = useState<number>(10);
-  const [currentPlayerId] = useState<string>('1'); // 假设当前玩家ID为1
   const [consoleLogs, setConsoleLogs] = useState<ConsoleLog[]>([]);
   const [showConsole, setShowConsole] = useState(true);
   const previousGameStateRef = useRef<GameState | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const consoleEndRef = useRef<HTMLDivElement>(null);
   const mobileConsoleEndRef = useRef<HTMLDivElement>(null);
+  const handStoryEndRef = useRef<HTMLDivElement>(null);
+  const handStoryAutoScrollKeyRef = useRef<string>('');
   const handStartChipsRef = useRef<Record<string, number> | null>(null);
   const handStartGameIdRef = useRef<string | null>(null);
 
@@ -179,9 +183,28 @@ export default function TexasHoldem() {
     console.debug('[ui]', ...args);
   };
 
+  const viewerCredential =
+    currentPlayerId && playerToken
+      ? { playerId: currentPlayerId, playerToken }
+      : undefined;
+
   useEffect(() => {
     scrollConsoleToEnd();
   }, [consoleLogs.length, showConsole, winnerInfo?.show, nextRoundInFlight]);
+
+  useEffect(() => {
+    const history = gameState?.actionHistory ?? [];
+    const latestEvent = history[history.length - 1];
+    const stateKey = `${gameState?.gameId ?? ''}:${latestEvent?.sequence ?? 0}:${latestEvent?.kind ?? 'none'}`;
+    if (history.length <= 0 || handStoryAutoScrollKeyRef.current === stateKey) {
+      return;
+    }
+
+    handStoryAutoScrollKeyRef.current = stateKey;
+    requestAnimationFrame(() => {
+      handStoryEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    });
+  }, [gameState?.gameId, gameState?.actionHistory]);
 
   function snapshotHandStart(state: GameState): void {
     handStartGameIdRef.current = state.gameId;
@@ -201,8 +224,13 @@ export default function TexasHoldem() {
     const endType: WinnerInfo['endType'] = nextState.endType === 'game' ? 'game' : 'hand';
     const champion = endType === 'game' ? winners[0] : undefined;
 
-    const baseline =
+    const baselineFromState =
+      nextState.handStartChips && Object.keys(nextState.handStartChips).length > 0
+        ? nextState.handStartChips
+        : null;
+    const baselineFromRef =
       handStartGameIdRef.current === nextState.gameId ? handStartChipsRef.current : null;
+    const baseline = baselineFromState ?? baselineFromRef;
     const prevChips = prev ? Object.fromEntries(prev.players.map(p => [p.id, p.chips])) : null;
     const baselineLabel = baseline ? '本手净输赢' : '结算变化';
 
@@ -514,11 +542,11 @@ export default function TexasHoldem() {
     try {
       setNextRoundInFlight(true);
       debugLog('nextRound start', { gameId });
-      const result = await gameApiClient.nextRound(gameId);
+      const result = await gameApiClient.nextRound(gameId, viewerCredential);
       debugLog('nextRound response', { success: result.success, hasData: Boolean(result.data), error: result.error, message: result.message });
       if (result.success && !result.data) {
         debugLog('nextRound no data, fallback to getGameState', { gameId });
-        const refreshed = await gameApiClient.getGameState(gameId);
+        const refreshed = await gameApiClient.getGameState(gameId, viewerCredential);
         debugLog('getGameState response', { success: refreshed.success, hasData: Boolean(refreshed.data), error: refreshed.error, message: refreshed.message });
         if (refreshed.success && refreshed.data) {
           const applied = applyIncomingGameState(refreshed.data);
@@ -560,7 +588,7 @@ export default function TexasHoldem() {
 
   async function handleSettleShowdown(gameId: string) {
     try {
-      const result = await gameApiClient.settleShowdown(gameId);
+      const result = await gameApiClient.settleShowdown(gameId, viewerCredential);
       if (result.success && result.data) {
         applyIncomingGameState(result.data as GameState);
       } else {
@@ -585,7 +613,7 @@ export default function TexasHoldem() {
     setError('');
 
     try {
-      const result = await gameApiClient.getGameState(gameId);
+      const result = await gameApiClient.getGameState(gameId, viewerCredential);
 
       if (result.success && result.data) {
         const applied = applyIncomingGameState(result.data);
@@ -626,7 +654,7 @@ export default function TexasHoldem() {
 
   // WebSocket 连接函数
   const connectWebSocket = () => {
-    if (!gameState?.gameId) return;
+    if (!gameState?.gameId || !currentPlayerId || !playerToken) return;
 
     let wsUrl = '';
     if (API_CONFIG.WS_SERVER_URL) {
@@ -652,7 +680,16 @@ export default function TexasHoldem() {
       debugLog('ws open', { wsUrl, gameId: gameState.gameId, playerId: currentPlayerId });
       setWsConnected(true);
       addConsoleLog('info', `WebSocket 已连接: ${wsUrl}`);
-      ws.send(JSON.stringify({ type: 'join_game', data: { gameId: gameState.gameId, playerId: currentPlayerId } }));
+      ws.send(
+        JSON.stringify({
+          type: 'join_game',
+          data: {
+            gameId: gameState.gameId,
+            playerId: currentPlayerId,
+            playerToken,
+          },
+        }),
+      );
       
       // 清除重连定时器
       if (reconnectTimerRef.current) {
@@ -665,7 +702,7 @@ export default function TexasHoldem() {
       if (!active) return;
       debugLog('ws close', { code: event.code, reason: event.reason });
       setWsConnected(false);
-      addConsoleLog('error', `WebSocket 已断开 (${event.code})，3秒后自动重连...`);
+      addConsoleLog('error', `WebSocket 已断开 (${event.code})，1秒后自动重连...`);
       
       // 尝试重连
       if (reconnectTimerRef.current) {
@@ -676,7 +713,7 @@ export default function TexasHoldem() {
           addConsoleLog('info', '正在尝试重连...');
           connectWebSocket();
         }
-      }, 5000);
+      }, 1000);
     };
 
     ws.onerror = (event) => {
@@ -699,6 +736,12 @@ export default function TexasHoldem() {
         debugLog('ws message', { type: message.type, keys: message.data ? Object.keys(message.data) : undefined });
         if (message.type === 'connected') {
           addConsoleLog('info', message.data?.message || '已连接到服务器');
+          return;
+        }
+        if (message.type === 'error') {
+          const reason = message.data?.message || 'WebSocket 错误';
+          addConsoleLog('error', String(reason));
+          setError(String(reason));
           return;
         }
         if (message.type === 'bot_thinking') {
@@ -745,12 +788,17 @@ export default function TexasHoldem() {
         reconnectTimerRef.current = null;
       }
     };
-  }, [gameState?.gameId]);
+  }, [gameState?.gameId, currentPlayerId, playerToken]);
 
   // 初始化游戏
   useEffect(() => {
     const timerId = setTimeout(() => {
       if (gameId) {
+        if (!currentPlayerId || !playerToken) {
+          setError('缺少玩家身份信息，请使用邀请链接进入牌局');
+          setLoading(false);
+          return;
+        }
         setLoading(true);
         void loadGame(gameId);
       }
@@ -760,7 +808,7 @@ export default function TexasHoldem() {
     return () => {
       clearTimeout(timerId);
     };
-  }, [gameId]);
+  }, [gameId, currentPlayerId, playerToken]);
 
   // 刷新游戏状态
   const refreshGame = async () => {
@@ -768,7 +816,7 @@ export default function TexasHoldem() {
     addConsoleLog('info', '刷新游戏状态...');
 
     try {
-      const result = await gameApiClient.getGameState(gameState.gameId);
+      const result = await gameApiClient.getGameState(gameState.gameId, viewerCredential);
       if (result.success && result.data) {
         const applied = applyIncomingGameState(result.data);
         if (!applied) addConsoleLog('error', '刷新失败: 游戏状态格式不正确');
@@ -818,11 +866,18 @@ export default function TexasHoldem() {
     setError('');
 
     try {
+      if (!playerToken) {
+        setError('缺少玩家凭证，请从邀请链接重新进入');
+        return;
+      }
+      const actionId = `${currentPlayerId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const result = await gameApiClient.playerAction(
         gameState.gameId,
         currentPlayerId,
         action,
-        amount
+        amount,
+        playerToken,
+        actionId,
       );
 
       if (result.success && result.data) {
@@ -1024,43 +1079,118 @@ export default function TexasHoldem() {
     return [...players.slice(myIndex), ...players.slice(0, myIndex)];
   }
 
-  function getSeatPositions(seatCount: number): Array<{ leftPct: number; topPct: number }> {
-    const layout =
-      seatCount >= 8
-        ? { rx: 42, ry: 28, bottom: 88, top: 12 }
-        : seatCount >= 6
-          ? { rx: 40, ry: 26, bottom: 86, top: 14 }
-          : { rx: 38, ry: 24, bottom: 84, top: 16 };
+  type SeatPosition = { leftPct: number; topPct: number };
 
+  function clampPct(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function pushSeatAwayFromDealArea(
+    leftPct: number,
+    topPct: number,
+    seatCount: number,
+    horizontalClamp: number,
+    maxTopPct: number,
+  ): SeatPosition {
+    // 为发牌区预留缓冲区，避免上方/左右座位压到公共牌与底池区域。
+    const safeArea =
+      seatCount >= 8
+        ? { rx: 36, ry: 32, minNorm: 1.28 }
+        : seatCount >= 6
+          ? { rx: 34, ry: 30, minNorm: 1.22 }
+          : { rx: 32, ry: 28, minNorm: 1.16 };
+
+    const dx = leftPct - 50;
+    const dy = topPct - 50;
+    const norm = (dx * dx) / (safeArea.rx * safeArea.rx) + (dy * dy) / (safeArea.ry * safeArea.ry);
+
+    if (norm >= safeArea.minNorm) {
+      return { leftPct, topPct };
+    }
+
+    const scale = Math.sqrt(safeArea.minNorm / Math.max(norm, 0.0001));
+
+    return {
+      leftPct: clampPct(50 + dx * scale, horizontalClamp, 100 - horizontalClamp),
+      topPct: clampPct(50 + dy * scale, 8, maxTopPct),
+    };
+  }
+
+  function getSeatPositions(seatCount: number): SeatPosition[] {
+    if (seatCount <= 0) return [];
+    if (seatCount === 1) return [{ leftPct: 50, topPct: 84 }];
+
+    // Heads-up 单独处理，确保上下对称。
     if (seatCount === 2) {
       return [
-        { leftPct: 50, topPct: 84 },
-        { leftPct: 50, topPct: 16 },
+        { leftPct: 50, topPct: 85 },
+        { leftPct: 50, topPct: 10 },
       ];
     }
 
-    return Array.from({ length: seatCount }, (_, seatIndex) => {
-      if (seatIndex === 0) {
-        return { leftPct: 50, topPct: layout.bottom };
-      }
+    const layout =
+      seatCount >= 9
+        ? { rx: 48, ry: 37, bottom: 86 }
+        : seatCount >= 7
+          ? { rx: 46, ry: 36, bottom: 85 }
+          : seatCount >= 5
+            ? { rx: 44, ry: 37, bottom: 84 }
+            : { rx: 40, ry: 32, bottom: 83 };
 
-      const topSeatIndex = Math.floor(seatCount / 2);
-      if (seatIndex === topSeatIndex) {
-        return { leftPct: 50, topPct: layout.top };
-      }
+    // 玩家越多，越向左右展开，避免 7~9 人时在上半区过度拥挤。
+    const arcSpan =
+      seatCount <= 3
+        ? 104
+        : seatCount === 4
+          ? 156
+          : seatCount === 5
+            ? 202
+            : seatCount === 6
+              ? 220
+              : seatCount === 7
+                ? 238
+                : seatCount === 8
+                  ? 250
+                  : 262;
 
-      const angleStep = 360 / seatCount;
-      const angleDeg = 90 + angleStep * seatIndex;
+    const startDeg = 270 - arcSpan / 2;
+    const endDeg = 270 + arcSpan / 2;
+    const opponentCount = seatCount - 1;
+    const horizontalClamp = 11;
+    const maxTopPct = layout.bottom - 4;
+    const spreadPower = seatCount >= 8 ? 0.66 : seatCount === 7 ? 0.76 : seatCount >= 5 ? 0.86 : 0.92;
+
+    const positions: SeatPosition[] = [{ leftPct: 50, topPct: layout.bottom }];
+
+    for (let opponentIndex = 0; opponentIndex < opponentCount; opponentIndex += 1) {
+      const linearRatio = opponentCount === 1 ? 0.5 : opponentIndex / (opponentCount - 1);
+      const ratio =
+        opponentCount <= 2
+          ? linearRatio
+          : 0.5 + Math.sign(linearRatio - 0.5) * Math.pow(Math.abs(linearRatio - 0.5) * 2, spreadPower) / 2;
+      const angleDeg = startDeg + (endDeg - startDeg) * ratio;
       const angleRad = (Math.PI / 180) * angleDeg;
 
-      let leftPct = 50 + Math.cos(angleRad) * layout.rx;
-      let topPct = 50 + Math.sin(angleRad) * layout.ry;
+      const baseLeftPct = clampPct(50 + Math.cos(angleRad) * layout.rx, horizontalClamp, 100 - horizontalClamp);
+      const baseTopPct = clampPct(50 + Math.sin(angleRad) * layout.ry, 9, maxTopPct);
+      const adjusted = pushSeatAwayFromDealArea(baseLeftPct, baseTopPct, seatCount, horizontalClamp, maxTopPct);
 
-      leftPct = Math.max(10, Math.min(90, leftPct));
-      topPct = Math.max(layout.top, Math.min(layout.bottom, topPct));
+      positions.push(adjusted);
+    }
 
-      return { leftPct, topPct };
-    });
+    return positions;
+  }
+
+  function getSeatScale(seatCount: number, seatIndex: number): number {
+    if (seatCount >= 9) return seatIndex === 0 ? 0.84 : 0.68;
+    if (seatCount === 8) return seatIndex === 0 ? 0.88 : 0.72;
+    if (seatCount === 7) return seatIndex === 0 ? 0.92 : 0.76;
+    if (seatCount === 6) return seatIndex === 0 ? 0.95 : 0.8;
+    if (seatCount === 5) return seatIndex === 0 ? 0.97 : 0.84;
+    if (seatCount === 4) return seatIndex === 0 ? 0.99 : 0.9;
+    if (seatCount === 3) return seatIndex === 0 ? 1 : 0.94;
+    if (seatCount === 2) return seatIndex === 0 ? 1 : 0.96;
+    return 1;
   }
 
   const isMyTurn = gameState.phase !== 'showdown' && gameState.phase !== 'completed' && gameState.players[gameState.currentPlayerIndex]?.id === currentPlayerId;
@@ -1070,7 +1200,12 @@ export default function TexasHoldem() {
   const seatedPlayers = rotatePlayers(gameState.players, currentPlayerId);
   const seatCount = seatedPlayers.length;
   const seatPositions = getSeatPositions(seatCount);
-  const seatCardClass = '';
+  const seatRingInsetClass =
+    seatCount >= 9
+      ? 'absolute inset-[2%_2%_8%]'
+      : seatCount >= 7
+        ? 'absolute inset-[3%_3%_7%]'
+        : 'absolute inset-[4%_5%_6%]';
   const currentTurnPlayer = gameState.players[gameState.currentPlayerIndex];
   const myPlayer = gameState.players.find(player => player.id === currentPlayerId) ?? seatedPlayers[0];
   const activePlayers = gameState.players.filter(player => !player.isFolded);
@@ -1455,7 +1590,7 @@ export default function TexasHoldem() {
                     </div>
 
                     <div className="absolute inset-0 z-10 hidden md:block">
-                      <div className="absolute inset-[4%_5%_6%]">
+                      <div className={seatRingInsetClass}>
                         <div className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-5">
                           <div className="rounded-[28px] border border-white/10 bg-black/25 px-5 py-3 backdrop-blur-md shadow-xl">
                             <div className="flex items-center justify-center gap-3">
@@ -1489,14 +1624,16 @@ export default function TexasHoldem() {
 
                         {seatedPlayers.map((player, seatIndex) => {
                           const pos = seatPositions[seatIndex];
+                          const seatScale = getSeatScale(seatCount, seatIndex);
                           return (
                             <div
                               key={player.id}
-                              className={`${seatCardClass} absolute z-20 transition-all duration-500 ease-out`}
+                              className="absolute z-20 transition-all duration-500 ease-out"
                               style={{
                                 left: `${pos.leftPct}%`,
                                 top: `${pos.topPct}%`,
-                                transform: 'translate(-50%, -50%)',
+                                transform: `translate(-50%, -50%) scale(${seatScale})`,
+                                transformOrigin: 'center center',
                               }}
                             >
                               {renderSeatCard(player, 'table')}
@@ -1691,6 +1828,7 @@ export default function TexasHoldem() {
                     </div>
                   ))
                 )}
+                <div ref={handStoryEndRef} />
               </div>
             </Card>
           </aside>
@@ -1833,9 +1971,12 @@ export default function TexasHoldem() {
                   className="flex-1 bg-gradient-to-r from-yellow-600 to-yellow-500 font-black text-black shadow-lg shadow-yellow-900/40 hover:from-yellow-500 hover:to-yellow-400"
                 >
                   {nextRoundInFlight
-                    ? winnerInfo.endType === 'game'
-                      ? '重置中...'
-                      : '开局中...'
+                    ? (
+                      <span className="inline-flex items-center gap-2">
+                        <RotateCw className="h-3.5 w-3.5 animate-spin" />
+                        {winnerInfo.endType === 'game' ? '重置中...' : '开局中...'}
+                      </span>
+                    )
                     : winnerInfo.endType === 'game'
                       ? '开始新一整局'
                       : '开始下一局'}

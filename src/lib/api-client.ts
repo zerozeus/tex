@@ -29,6 +29,11 @@ export type BotTemplate = {
   url: string;
 };
 
+type ViewerCredential = {
+  playerId?: string;
+  playerToken?: string;
+};
+
 const API_DEBUG = process.env.NEXT_PUBLIC_POKER_DEBUG === '1';
 
 function safeStringify(value: unknown, maxLength = 2000): string {
@@ -182,21 +187,32 @@ export class GameApiClient {
   /**
    * 获取游戏状态
    */
-  async getGameState(gameId: string): Promise<ApiResult<unknown>> {
-    const url = this.getUrl(`/game/state?gameId=${gameId}`);
-    const result = await this.fetchJson<ApiResult<unknown>>(url);
+  async getGameState(gameId: string, viewer?: ViewerCredential): Promise<ApiResult<unknown>> {
+    const url = this.getUrl('/game/state');
+    const result = await this.fetchJson<ApiResult<unknown>>(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gameId, playerId: viewer?.playerId, playerToken: viewer?.playerToken }),
+    });
     return result;
   }
 
   /**
    * 玩家操作
    */
-  async playerAction(gameId: string, playerId: string, action: string, amount?: number): Promise<ApiResult<unknown>> {
+  async playerAction(
+    gameId: string,
+    playerId: string,
+    action: string,
+    amount?: number,
+    playerToken?: string,
+    actionId?: string,
+  ): Promise<ApiResult<unknown>> {
     const url = this.getUrl('/game/action');
     const result = await this.fetchJson<ApiResult<unknown>>(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gameId, playerId, action, amount }),
+      body: JSON.stringify({ gameId, playerId, playerToken, action, amount, actionId }),
     });
     return result;
   }
@@ -228,22 +244,28 @@ export class GameApiClient {
   /**
    * 进入下一局 (结算后)
    */
-  async nextRound(gameId: string): Promise<ApiResult<unknown>> {
+  async nextRound(
+    gameId: string,
+    viewer?: ViewerCredential,
+  ): Promise<ApiResult<unknown>> {
     const url = this.getUrl('/game/next-round');
     const result = await this.fetchJson<ApiResult<unknown>>(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gameId }),
+      body: JSON.stringify({ gameId, playerId: viewer?.playerId, playerToken: viewer?.playerToken }),
     });
     return result;
   }
 
-  async settleShowdown(gameId: string): Promise<ApiResult<unknown>> {
+  async settleShowdown(
+    gameId: string,
+    viewer?: ViewerCredential,
+  ): Promise<ApiResult<unknown>> {
     const url = this.getUrl('/game/settle-showdown');
     const result = await this.fetchJson<ApiResult<unknown>>(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gameId }),
+      body: JSON.stringify({ gameId, playerId: viewer?.playerId, playerToken: viewer?.playerToken }),
     });
     return result;
   }

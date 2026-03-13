@@ -172,6 +172,23 @@ export class GameDatabaseService {
       for (const player of gameState.players) {
         const isWinner = winners.some(w => w.id === player.id);
         const rank = isWinner ? 1 : gameState.players.indexOf(player) + 1;
+        const { data: gamePlayer, error: gamePlayerError } = await this.client
+          .from('game_players')
+          .select('initial_chips')
+          .eq('game_id', gameId)
+          .eq('player_id', player.id)
+          .single();
+
+        if (gamePlayerError && gamePlayerError.code !== 'PGRST116') {
+          console.error('Failed to fetch game player record:', gamePlayerError);
+          throw gamePlayerError;
+        }
+
+        const initialChips =
+          typeof gamePlayer?.initial_chips === 'number'
+            ? gamePlayer.initial_chips
+            : player.chips;
+        const profitDelta = player.chips - initialChips;
 
         await this.client
           .from('game_players')
@@ -184,7 +201,7 @@ export class GameDatabaseService {
           .eq('player_id', player.id);
 
         // 更新玩家统计
-        await this.updatePlayerStats(player.id, player.name, isWinner, player.chips);
+        await this.updatePlayerStats(player.id, player.name, isWinner, profitDelta);
       }
 
       console.log(`Game ended: ${gameId} with ${winners.length} winner(s)`);
@@ -201,7 +218,7 @@ export class GameDatabaseService {
     playerId: string,
     playerName: string,
     isWinner: boolean,
-    finalChips: number
+    profitDelta: number
   ): Promise<void> {
     if (!this.client) return;
     try {
@@ -219,7 +236,6 @@ export class GameDatabaseService {
 
       if (!existingStats) {
         // 创建新的玩家统计
-        const profit = 0; // 初始无法计算利润，因为不知道初始筹码
         await this.client
           .from('player_stats')
           .insert({
@@ -227,17 +243,22 @@ export class GameDatabaseService {
             player_name: playerName,
             total_games: 1,
             wins: isWinner ? 1 : 0,
-            total_profit: profit,
+            total_profit: profitDelta,
           });
       } else {
         // 更新现有统计
-        const profit = finalChips - existingStats.total_profit; // 简化计算
+        const totalGames =
+          typeof existingStats.total_games === 'number' ? existingStats.total_games : 0;
+        const wins = typeof existingStats.wins === 'number' ? existingStats.wins : 0;
+        const totalProfit =
+          typeof existingStats.total_profit === 'number' ? existingStats.total_profit : 0;
+
         await this.client
           .from('player_stats')
           .update({
-            total_games: existingStats.total_games + 1,
-            wins: existingStats.wins + (isWinner ? 1 : 0),
-            total_profit: existingStats.total_profit + profit,
+            total_games: totalGames + 1,
+            wins: wins + (isWinner ? 1 : 0),
+            total_profit: totalProfit + profitDelta,
             updated_at: new Date().toISOString(),
           })
           .eq('player_id', playerId);
