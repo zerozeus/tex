@@ -682,7 +682,7 @@ app.post('/api/game/next-round', async (req, res) => {
       res.json({
         success: result.success,
         data: projectGameStateForViewer(
-          game.getGameState(),
+          result.data,
           viewerCheck.viewerPlayerId,
         ),
       });

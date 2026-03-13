@@ -336,6 +336,25 @@ export default function TexasHoldem() {
       setResultRevealCountdown(0);
     }
 
+    const prevHandNumber = typeof prev?.handNumber === 'number' ? prev.handNumber : null;
+    const nextHandNumber = typeof nextState.handNumber === 'number' ? nextState.handNumber : null;
+    if (
+      prev &&
+      prev.gameId === nextState.gameId &&
+      prevHandNumber !== null &&
+      nextHandNumber !== null &&
+      nextHandNumber < prevHandNumber
+    ) {
+      debugLog('ignore stale state', {
+        gameId: nextState.gameId,
+        prevPhase: prev.phase,
+        nextPhase: nextState.phase,
+        prevHandNumber,
+        nextHandNumber,
+      });
+      return true;
+    }
+
     if (prev) {
       if (
         prev.phase !== nextState.phase ||

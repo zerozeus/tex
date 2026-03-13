@@ -145,7 +145,7 @@ export class GameOrchestrator {
   }
 
   async startNextRound(gameId: string) {
-    const shouldDriveBots = await this.gameLock.withLock(gameId, async () => {
+    const { shouldDriveBots, stateForResponse } = await this.gameLock.withLock(gameId, async () => {
       const engine = this.mustGetEngine(gameId);
       const state = engine.getGameState();
       debugLog('nextRound:start', { gameId, before: summarizeState(state) });
@@ -157,12 +157,12 @@ export class GameOrchestrator {
         
         // Broadcast new state
         await this.broadcaster.broadcastGameState(gameId, newState);
-        return true;
+        return { shouldDriveBots: true, stateForResponse: newState };
       } else {
         debugLog('nextRound:skip', { gameId, phase: state.phase });
       }
       
-      return false;
+      return { shouldDriveBots: false, stateForResponse: state };
     });
 
     // 响应请求后异步推进机器人，避免 next-round 请求被外部 bot 决策耗时阻塞。
@@ -170,7 +170,7 @@ export class GameOrchestrator {
       this.queueBotDrive(gameId);
     }
 
-    return { success: true };
+    return { success: true, data: stateForResponse };
   }
 
   async startGame(gameId: string) {
