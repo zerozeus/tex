@@ -234,7 +234,7 @@ export class GameOrchestrator {
       const botChipsBefore = bot.chips;
       const botPotBefore = botStateBefore.pot;
 
-      let result = engine.handleAction(bot.id, decision.action, decision.amount);
+      let result = engine.handleAction(bot.id, decision.action, decision.amount, decision.chat);
 
       if (!result.success) {
         console.warn(`Bot action failed: ${decision.action}, trying fallback`);

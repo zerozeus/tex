@@ -35,6 +35,7 @@ export interface GameHistoryEvent {
   createdAt: string;
   playerId?: string;
   playerName?: string;
+  chat?: string;
   blindType?: 'small' | 'big';
   action?: 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'allin';
   amount?: number;

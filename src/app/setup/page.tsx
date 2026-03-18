@@ -203,14 +203,8 @@ export default function GameSetup() {
       }
       setPlayers(newPlayers);
     } else if (newCount < players.length) {
-      // 移除玩家（保留第一个真人玩家）
-      const remainingPlayers = players.slice(0, newCount);
-      // 确保至少有一个真人玩家
-      if (!remainingPlayers.some(p => !p.isBot) && remainingPlayers.length > 0) {
-        remainingPlayers[0].isBot = false;
-        remainingPlayers[0].name = '玩家 1';
-      }
-      setPlayers(remainingPlayers);
+      // 移除末尾玩家
+      setPlayers(players.slice(0, newCount));
     }
   };
 
@@ -233,12 +227,6 @@ export default function GameSetup() {
       if (!current) return prev;
 
       if (!current.isBot) {
-        const humanCount = prev.filter((player) => !player.isBot).length;
-        if (humanCount <= 1) {
-          setError('至少需要一个真人玩家');
-          return prev;
-        }
-
         const botCount = prev.filter((player) => player.isBot).length;
         const template = availableBots.length
           ? availableBots[botCount % availableBots.length]
@@ -300,12 +288,6 @@ export default function GameSetup() {
 
     if (players.some(p => !p.name.trim())) {
       return '所有玩家必须设置名称';
-    }
-
-    // 检查是否至少有一个真人玩家
-    const humanPlayer = players.find(p => !p.isBot);
-    if (!humanPlayer) {
-      return '至少需要一个真人玩家';
     }
 
     // 检查机器人配置（botToken 现在是可选的，没有token会使用默认策略）
@@ -416,6 +398,11 @@ export default function GameSetup() {
             return;
           }
 
+          return;
+        }
+
+        if (!humanPlayer) {
+          router.push(`/?gameId=${encodeURIComponent(data.gameId)}`);
           return;
         }
 

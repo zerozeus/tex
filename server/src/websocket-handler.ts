@@ -251,9 +251,9 @@ export class WebSocketHandler {
   }
 
   private handleJoinGame(clientId: string, data: unknown): void {
-    const payload = data as { gameId: string; playerId: string; playerToken: string };
-    
-    if (!payload.gameId || !payload.playerId || !payload.playerToken) {
+    const payload = data as { gameId?: string; playerId?: string; playerToken?: string };
+
+    if (!payload.gameId) {
       debugLog('join:invalid', {
         clientId,
         payload: {
@@ -264,41 +264,85 @@ export class WebSocketHandler {
       });
       this.sendToClient(clientId, {
         type: 'error',
-        data: { message: 'Missing gameId, playerId or playerToken' },
+        data: { message: 'Missing gameId' },
         timestamp: Date.now(),
       });
       return;
     }
 
-    if (
-      this.validatePlayerAuth &&
-      !this.validatePlayerAuth(payload.gameId, payload.playerId, payload.playerToken)
-    ) {
-      debugLog('join:unauthorized', {
+    const hasCredential = Boolean(payload.playerId || payload.playerToken);
+    const gameExists = this.games.has(payload.gameId);
+
+    if (!gameExists) {
+      debugLog('join:fail', {
         clientId,
         gameId: payload.gameId,
-        playerId: payload.playerId,
+        mode: hasCredential ? 'player' : 'spectator',
+        reason: 'game_not_found',
       });
       this.sendToClient(clientId, {
         type: 'error',
-        data: { message: 'Invalid player credential' },
+        data: { message: 'Failed to join game (game not found)' },
         timestamp: Date.now(),
       });
       return;
     }
 
-    const success = this.joinGame(clientId, payload.gameId, payload.playerId, payload.playerToken);
-    
+    if (hasCredential) {
+      if (!payload.playerId || !payload.playerToken) {
+        this.sendToClient(clientId, {
+          type: 'error',
+          data: { message: 'Missing playerId or playerToken' },
+          timestamp: Date.now(),
+        });
+        return;
+      }
+
+      if (
+        this.validatePlayerAuth &&
+        !this.validatePlayerAuth(payload.gameId, payload.playerId, payload.playerToken)
+      ) {
+        debugLog('join:unauthorized', {
+          clientId,
+          gameId: payload.gameId,
+          playerId: payload.playerId,
+        });
+        this.sendToClient(clientId, {
+          type: 'error',
+          data: { message: 'Invalid player credential' },
+          timestamp: Date.now(),
+        });
+        return;
+      }
+
+      const success = this.joinGame(clientId, payload.gameId, payload.playerId, payload.playerToken);
+
+      if (!success) {
+        debugLog('join:fail', { clientId, gameId: payload.gameId, playerId: payload.playerId });
+        this.sendToClient(clientId, {
+          type: 'error',
+          data: { message: 'Failed to join game (game not found)' },
+          timestamp: Date.now(),
+        });
+      } else {
+        console.log(`Client ${clientId} joined game ${payload.gameId} as player ${payload.playerId}`);
+        debugLog('join:ok', { clientId, gameId: payload.gameId, playerId: payload.playerId });
+      }
+      return;
+    }
+
+    const success = this.joinGameAsSpectator(clientId, payload.gameId);
+
     if (!success) {
-      debugLog('join:fail', { clientId, gameId: payload.gameId, playerId: payload.playerId });
+      debugLog('join:fail', { clientId, gameId: payload.gameId, mode: 'spectator' });
       this.sendToClient(clientId, {
         type: 'error',
         data: { message: 'Failed to join game (game not found)' },
         timestamp: Date.now(),
       });
     } else {
-      console.log(`Client ${clientId} joined game ${payload.gameId} as player ${payload.playerId}`);
-      debugLog('join:ok', { clientId, gameId: payload.gameId, playerId: payload.playerId });
+      console.log(`Client ${clientId} joined game ${payload.gameId} as spectator`);
+      debugLog('join:ok', { clientId, gameId: payload.gameId, mode: 'spectator' });
     }
   }
 
@@ -429,6 +473,27 @@ export class WebSocketHandler {
     this.sendToClient(clientId, {
       type: 'game_state',
       data: this.getStateForViewer(game, playerId),
+      timestamp: Date.now(),
+    });
+
+    return true;
+  }
+
+  public joinGameAsSpectator(clientId: string, gameId: string): boolean {
+    const client = this.clients.get(clientId);
+    const game = this.games.get(gameId);
+
+    if (!client || !game) {
+      return false;
+    }
+
+    client.playerId = undefined;
+    client.playerToken = undefined;
+    client.gameId = gameId;
+
+    this.sendToClient(clientId, {
+      type: 'game_state',
+      data: this.getStateForViewer(game),
       timestamp: Date.now(),
     });
 

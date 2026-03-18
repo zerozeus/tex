@@ -12,6 +12,8 @@ export type PlayerAccess = {
   token: string;
 };
 
+export type PlayerTokenSnapshot = Record<string, PlayerAccess[]>;
+
 export class PlayerAuthManager {
   private readonly gameTokens = new Map<string, Map<string, string>>();
   private readonly actionWindows = new Map<string, Map<string, ActionWindow>>();
@@ -38,6 +40,49 @@ export class PlayerAuthManager {
     if (!expectedToken) return false;
 
     return this.safeEquals(expectedToken, token);
+  }
+
+  exportTokenSnapshot(): PlayerTokenSnapshot {
+    const snapshot: PlayerTokenSnapshot = {};
+
+    for (const [gameId, tokenMap] of this.gameTokens.entries()) {
+      snapshot[gameId] = Array.from(tokenMap.entries()).map(([playerId, token]) => ({
+        playerId,
+        token,
+      }));
+    }
+
+    return snapshot;
+  }
+
+  importTokenSnapshot(snapshot: PlayerTokenSnapshot | undefined): number {
+    this.gameTokens.clear();
+    this.actionWindows.clear();
+
+    if (!snapshot || typeof snapshot !== 'object') {
+      return 0;
+    }
+
+    let restored = 0;
+
+    for (const [gameId, accessList] of Object.entries(snapshot)) {
+      if (!Array.isArray(accessList)) continue;
+
+      const tokenMap = new Map<string, string>();
+      for (const entry of accessList) {
+        if (!entry || typeof entry !== 'object') continue;
+        const playerId = typeof entry.playerId === 'string' ? entry.playerId.trim() : '';
+        const token = typeof entry.token === 'string' ? entry.token.trim() : '';
+        if (!playerId || !token) continue;
+        tokenMap.set(playerId, token);
+      }
+
+      if (tokenMap.size === 0) continue;
+      this.gameTokens.set(gameId, tokenMap);
+      restored += 1;
+    }
+
+    return restored;
   }
 
   isDuplicateAction(gameId: string, playerId: string, actionId: string): boolean {

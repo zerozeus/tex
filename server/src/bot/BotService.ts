@@ -22,9 +22,7 @@ export class BotService {
         const botToken = botPlayer.botToken;
         if (!botToken) return;
 
-        if (!botPlayer.sessionId) {
-          botPlayer.sessionId = `session_${botPlayer.id}_${Date.now()}`;
-        }
+        this.bindSessionIdToGame(state, botPlayer);
 
         const prompt = this.buildHandResultPrompt(state, botPlayer);
         await this.callCozeNotification(botPlayer, prompt);
@@ -39,9 +37,7 @@ export class BotService {
       return this.getDefaultDecision(state, botPlayer);
     }
 
-    if (!botPlayer.sessionId) {
-      botPlayer.sessionId = `session_${botPlayer.id}_${Date.now()}`;
-    }
+    this.bindSessionIdToGame(state, botPlayer);
 
     const prompt = this.buildDecisionPrompt(state, botPlayer);
     const contextSummary = this.buildContextSummary(state, botPlayer);
@@ -54,8 +50,8 @@ export class BotService {
     console.log(prompt);
     console.log('=====================================\n');
 
-    const projectId = botPlayer.botId || '7615209749759426602';
-    const apiUrl = botPlayer.apiUrl || 'https://rz2qynsv9r.coze.site/stream_run';
+    const projectId = botPlayer.botId || '';
+    const apiUrl = botPlayer.apiUrl || '';
 
     const payload = {
       content: {
@@ -119,8 +115,8 @@ export class BotService {
     const botToken = botPlayer.botToken;
     if (!botToken) return;
 
-    const projectId = botPlayer.botId || '7615209749759426602';
-    const apiUrl = botPlayer.apiUrl || 'https://rz2qynsv9r.coze.site/stream_run';
+    const projectId = botPlayer.botId || '';
+    const apiUrl = botPlayer.apiUrl || '';
 
     const payload = {
       content: {
@@ -176,6 +172,13 @@ export class BotService {
       return DEFAULT_COZE_TIMEOUT_MS;
     }
     return Math.floor(value);
+  }
+
+  private bindSessionIdToGame(state: GameState, botPlayer: Player): void {
+    const gameScopedSessionId = `session_${state.gameId}_${botPlayer.id}`;
+    if (botPlayer.sessionId !== gameScopedSessionId) {
+      botPlayer.sessionId = gameScopedSessionId;
+    }
   }
 
   private parseCozeResponse(responseText: string): unknown {
@@ -298,7 +301,7 @@ ${historyDesc}
 - 优先判断当前是否合法行动，以及是否有足够理由激进下注。
 - 如果选择 bet 或 raise，amount 必须是一个具体数字。
 - reason 要简短但要点明确。
-- chat 可选，可以是简短桌上发言。
+- chat 简短桌上发言，可以通过 chat 字段迷惑对手。
 
 【输出格式】
 只返回一个 JSON 对象，不要返回 markdown，不要返回解释性前后缀：
@@ -381,7 +384,8 @@ ${visibleShowdown}
         const amountDesc = event.amount != null ? `，投入 ${event.amount}` : '';
         const betDesc = event.playerBet != null ? `，本轮下注 ${event.playerBet}` : '';
         const potDesc = event.pot != null ? `，底池 ${event.pot}` : '';
-        return `- #${event.sequence} [${event.phase}] ${event.playerName} ${event.action}${amountDesc}${betDesc}${potDesc}`;
+        const chatDesc = event.chat ? `，chat: ${event.chat}` : '';
+        return `- #${event.sequence} [${event.phase}] ${event.playerName} ${event.action}${amountDesc}${betDesc}${potDesc}${chatDesc}`;
       }
       default:
         return `- #${event.sequence} ${event.note ?? '未知事件'}`;

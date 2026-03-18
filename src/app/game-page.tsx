@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Play, RotateCw, User, Coins, ArrowLeft, Terminal, Bot } from 'lucide-react';
 import { API_CONFIG, gameApiClient } from '@/lib/api-client';
+import { audioManager } from '@/lib/audio-manager';
 
 // 类型定义
 interface Card {
@@ -138,6 +139,26 @@ export default function TexasHoldem() {
     return names[phase] || phase;
   }
 
+  function playActionSfx(action?: string): void {
+    switch (action) {
+      case 'check':
+        audioManager.playSfx('check');
+        return;
+      case 'call':
+        audioManager.playSfx('call');
+        return;
+      case 'bet':
+      case 'raise':
+        audioManager.playSfx('raise');
+        return;
+      case 'allin':
+        audioManager.playSfx('allin');
+        return;
+      default:
+        return;
+    }
+  }
+
   type SettlementRow = {
     player: Player;
     delta: number;
@@ -187,6 +208,21 @@ export default function TexasHoldem() {
     currentPlayerId && playerToken
       ? { playerId: currentPlayerId, playerToken }
       : undefined;
+
+  const isBotOnlyState = (state: GameState | null | undefined): boolean =>
+    Boolean(state && state.players.length > 0 && state.players.every((player) => player.isBot));
+
+  const canControlFlow = (state: GameState | null | undefined): boolean =>
+    Boolean(viewerCredential) || isBotOnlyState(state);
+
+  useEffect(() => {
+    audioManager.bindUserGesture();
+    audioManager.setBgmVolume(1);
+    audioManager.setSfxVolume(0.9);
+    return () => {
+      audioManager.stopBgm();
+    };
+  }, []);
 
   useEffect(() => {
     scrollConsoleToEnd();
@@ -275,7 +311,8 @@ export default function TexasHoldem() {
     };
   }
 
-  function startNextRoundAuto(gameId: string) {
+  function startNextRoundAuto(gameId: string, stateSnapshot?: GameState) {
+    if (!canControlFlow(stateSnapshot ?? gameState)) return;
     setNextRoundCountdown(10);
     if (countdownRef.current) clearInterval(countdownRef.current);
 
@@ -283,7 +320,7 @@ export default function TexasHoldem() {
       setNextRoundCountdown(prev => {
         if (prev <= 1) {
           clearInterval(countdownRef.current!);
-          handleNextRound(gameId);
+          void handleNextRound(gameId, stateSnapshot);
           return 0;
         }
         return prev - 1;
@@ -356,6 +393,37 @@ export default function TexasHoldem() {
     }
 
     if (prev) {
+      const previousSequence = prev.actionHistory?.[prev.actionHistory.length - 1]?.sequence ?? 0;
+      const incrementalEvents = (nextState.actionHistory ?? []).filter(
+        (event) => event.sequence > previousSequence
+      );
+      incrementalEvents.forEach((event) => {
+        if (event.kind === 'action') {
+          playActionSfx(event.action);
+          return;
+        }
+        if (event.kind === 'hand_start') {
+          audioManager.playSfx('deal');
+          return;
+        }
+        if (event.kind === 'phase_change') {
+          if (event.phase === 'flop') {
+            audioManager.playSfx('flop');
+          } else if (event.phase === 'turn') {
+            audioManager.playSfx('turn');
+          } else if (event.phase === 'river') {
+            audioManager.playSfx('river');
+            window.setTimeout(() => {
+              audioManager.playSfx('tick');
+            }, 260);
+          } else if (event.phase === 'showdown') {
+            audioManager.playSfx('showdown');
+          }
+        }
+      });
+    }
+
+    if (prev) {
       if (
         prev.phase !== nextState.phase ||
         prev.currentPlayerIndex !== nextState.currentPlayerIndex ||
@@ -400,8 +468,33 @@ export default function TexasHoldem() {
           const built = buildWinnerInfo(null, nextState, winners, winAmount);
           setWinnerInfo(built);
           if (built.endType !== 'game') {
-            startNextRoundAuto(nextState.gameId);
+            startNextRoundAuto(nextState.gameId, nextState);
           }
+        }
+      } else if (nextState.phase === 'showdown') {
+        addConsoleLog('info', '🏆 摊牌时刻！');
+        if (!nextState.resultReady) {
+          setShowdownCountdown(5);
+          if (showdownCountdownRef.current) {
+            clearInterval(showdownCountdownRef.current);
+            showdownCountdownRef.current = null;
+          }
+          showdownCountdownRef.current = setInterval(() => {
+            setShowdownCountdown((prevCountdown) => {
+              if (prevCountdown <= 1) {
+                if (showdownCountdownRef.current) {
+                  clearInterval(showdownCountdownRef.current);
+                  showdownCountdownRef.current = null;
+                }
+                if (!settleInFlightRef.current) {
+                  settleInFlightRef.current = true;
+                  void handleSettleShowdown(nextState.gameId, nextState);
+                }
+                return 0;
+              }
+              return prevCountdown - 1;
+            });
+          }, 1000);
         }
       }
     } else {
@@ -476,7 +569,7 @@ export default function TexasHoldem() {
                          addConsoleLog('info', `👑 ${pending.champion?.name ?? pending.winners[0]?.name ?? '赢家'} 赢得整局！`, pending.champion?.name);
                        } else {
                          addConsoleLog('info', `🏆 ${pending.winners.map(w => w.name).join(' & ')} 赢得本局！`, pending.winners[0]?.name);
-                         startNextRoundAuto(pending.gameId);
+                        startNextRoundAuto(pending.gameId, nextState);
                        }
                      }
                      return 0;
@@ -490,7 +583,7 @@ export default function TexasHoldem() {
                  addConsoleLog('info', `👑 ${built.champion?.name ?? winners[0].name} 赢得整局！`, built.champion?.name ?? winners[0].name);
                } else {
                  addConsoleLog('info', `🏆 ${winners.map(w => w.name).join(' & ')} 赢得本局！`, winners[0].name);
-                 startNextRoundAuto(nextState.gameId);
+                startNextRoundAuto(nextState.gameId, nextState);
                }
              }
            }
@@ -517,12 +610,12 @@ export default function TexasHoldem() {
                        clearInterval(showdownCountdownRef.current);
                        showdownCountdownRef.current = null;
                      }
-                     if (!settleInFlightRef.current) {
-                       settleInFlightRef.current = true;
-                       void handleSettleShowdown(nextState.gameId);
-                     }
-                     return 0;
-                   }
+                    if (!settleInFlightRef.current) {
+                      settleInFlightRef.current = true;
+                      void handleSettleShowdown(nextState.gameId, nextState);
+                    }
+                    return 0;
+                  }
                    return prev - 1;
                  });
                }, 1000);
@@ -552,7 +645,8 @@ export default function TexasHoldem() {
 
 
   // 手动进入下一局
-  async function handleNextRound(gameId: string) {
+  async function handleNextRound(gameId: string, stateSnapshot?: GameState) {
+    if (!canControlFlow(stateSnapshot ?? gameState)) return;
     if (nextRoundInFlightRef.current) return;
     nextRoundInFlightRef.current = true;
     if (countdownRef.current) clearInterval(countdownRef.current);
@@ -605,7 +699,9 @@ export default function TexasHoldem() {
     }
   }
 
-  async function handleSettleShowdown(gameId: string) {
+  async function handleSettleShowdown(gameId: string, stateSnapshot?: GameState) {
+    if (!canControlFlow(stateSnapshot ?? gameState)) return;
+
     try {
       const result = await gameApiClient.settleShowdown(gameId, viewerCredential);
       if (result.success && result.data) {
@@ -673,7 +769,7 @@ export default function TexasHoldem() {
 
   // WebSocket 连接函数
   const connectWebSocket = () => {
-    if (!gameState?.gameId || !currentPlayerId || !playerToken) return;
+    if (!gameState?.gameId) return;
 
     let wsUrl = '';
     if (API_CONFIG.WS_SERVER_URL) {
@@ -699,14 +795,17 @@ export default function TexasHoldem() {
       debugLog('ws open', { wsUrl, gameId: gameState.gameId, playerId: currentPlayerId });
       setWsConnected(true);
       addConsoleLog('info', `WebSocket 已连接: ${wsUrl}`);
+      const joinData: { gameId: string; playerId?: string; playerToken?: string } = {
+        gameId: gameState.gameId,
+      };
+      if (currentPlayerId && playerToken) {
+        joinData.playerId = currentPlayerId;
+        joinData.playerToken = playerToken;
+      }
       ws.send(
         JSON.stringify({
           type: 'join_game',
-          data: {
-            gameId: gameState.gameId,
-            playerId: currentPlayerId,
-            playerToken,
-          },
+          data: joinData,
         }),
       );
       
@@ -813,11 +912,6 @@ export default function TexasHoldem() {
   useEffect(() => {
     const timerId = setTimeout(() => {
       if (gameId) {
-        if (!currentPlayerId || !playerToken) {
-          setError('缺少玩家身份信息，请使用邀请链接进入牌局');
-          setLoading(false);
-          return;
-        }
         setLoading(true);
         void loadGame(gameId);
       }
@@ -828,6 +922,14 @@ export default function TexasHoldem() {
       clearTimeout(timerId);
     };
   }, [gameId, currentPlayerId, playerToken]);
+
+  useEffect(() => {
+    if (!gameState?.gameId) {
+      audioManager.playBgm('lobby');
+      return;
+    }
+    audioManager.playBgm('table');
+  }, [gameState?.gameId]);
 
   // 刷新游戏状态
   const refreshGame = async () => {
@@ -908,8 +1010,21 @@ export default function TexasHoldem() {
       }
     } catch (err) {
       console.error('Action failed:', err);
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('403') && message.includes('玩家身份校验失败')) {
+        const hint = '玩家身份已失效（服务可能重启），请返回设置页重新创建牌局';
+        setError(hint);
+        addConsoleLog('error', hint);
+        return;
+      }
+      if (message.includes('404') && message.includes('游戏不存在')) {
+        const hint = '当前牌局已失效，请返回设置页重新创建牌局';
+        setError(hint);
+        addConsoleLog('error', hint);
+        return;
+      }
       setError('网络错误，请重试');
-      addConsoleLog('error', '网络错误');
+      addConsoleLog('error', `网络错误: ${message}`);
     }
   };
 

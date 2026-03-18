@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { WebSocketHandler } from './websocket-handler';
 import { GameConfig } from './types';
+import { GameEngine } from './game-engine';
 import { gameDatabaseService } from './storage/database/game-database.service';
 import { installConsoleFileLogging } from './utils/logger';
 import next from 'next';
@@ -14,6 +15,12 @@ import { AVAILABLE_BOTS } from './bot/bots-config';
 import { GameOrchestrator } from './orchestrator/GameOrchestrator';
 import { PlayerAuthManager } from './utils/player-auth';
 import { projectGameStateForViewer } from './utils/state-visibility';
+import {
+  getRuntimeSnapshotPath,
+  loadRuntimeSnapshot,
+  saveRuntimeSnapshot,
+  type RuntimeGameSnapshot,
+} from './utils/runtime-state';
 
 installConsoleFileLogging();
 
@@ -41,8 +48,10 @@ const httpServer = createServer(app);
 // 中间件
 app.use(cors());
 app.use(express.json());
+app.use('/assets', express.static(path.join(projectRoot, 'assets')));
 
 const DEBUG_LOG = process.env.POKER_DEBUG === '1';
+const ENABLE_RUNTIME_SNAPSHOT = dev;
 
 function safeStringify(value: unknown, maxLength = 2000): string {
   try {
@@ -168,8 +177,117 @@ wsHandler.configureAccessControl({
 // Orchestrator Setup
 const botService = new BotService();
 const gameLock = new GameLock();
+
+let runtimePersistTimer: NodeJS.Timeout | null = null;
+let runtimePersistReason = 'unknown';
+
+function buildRuntimeGameSnapshots(): RuntimeGameSnapshot[] {
+  const snapshots: RuntimeGameSnapshot[] = [];
+
+  for (const gameInfo of games.values()) {
+    const engine = wsHandler.getGame(gameInfo.id);
+    if (!engine) continue;
+
+    snapshots.push({
+      gameId: gameInfo.id,
+      createdAt: gameInfo.createdAt,
+      playerCount: gameInfo.playerCount,
+      config: gameInfo.config,
+      engine: engine.exportSnapshot(),
+    });
+  }
+
+  return snapshots;
+}
+
+function persistRuntimeState(reason: string): void {
+  if (!ENABLE_RUNTIME_SNAPSHOT) return;
+  runtimePersistReason = reason;
+  const snapshots = buildRuntimeGameSnapshots();
+
+  saveRuntimeSnapshot({
+    version: 1,
+    savedAt: Date.now(),
+    games: snapshots,
+    playerTokens: playerAuthManager.exportTokenSnapshot(),
+  });
+
+  if (DEBUG_LOG) {
+    console.log('[runtime] snapshot saved', {
+      reason,
+      games: snapshots.length,
+      path: getRuntimeSnapshotPath(),
+    });
+  }
+}
+
+function scheduleRuntimePersistence(reason: string): void {
+  if (!ENABLE_RUNTIME_SNAPSHOT) return;
+  runtimePersistReason = reason;
+  if (runtimePersistTimer) return;
+
+  runtimePersistTimer = setTimeout(() => {
+    runtimePersistTimer = null;
+    persistRuntimeState(runtimePersistReason);
+  }, 120);
+}
+
+function flushRuntimePersistence(reason: string): void {
+  if (!ENABLE_RUNTIME_SNAPSHOT) return;
+  if (runtimePersistTimer) {
+    clearTimeout(runtimePersistTimer);
+    runtimePersistTimer = null;
+  }
+  persistRuntimeState(reason);
+}
+
+function restoreRuntimeState(): void {
+  if (!ENABLE_RUNTIME_SNAPSHOT) return;
+  const snapshot = loadRuntimeSnapshot();
+  if (!snapshot) return;
+
+  let restoredGames = 0;
+  for (const entry of snapshot.games) {
+    try {
+      if (!entry || typeof entry !== 'object') continue;
+      if (typeof entry.gameId !== 'string' || !entry.gameId) continue;
+      if (!entry.config || typeof entry.config !== 'object') continue;
+      if (!entry.engine || typeof entry.engine !== 'object') continue;
+
+      const engine = GameEngine.fromSnapshot(entry.engine);
+      wsHandler.getGamesMap().set(entry.gameId, engine);
+
+      const state = engine.getGameState();
+      games.set(entry.gameId, {
+        id: entry.gameId,
+        createdAt: typeof entry.createdAt === 'number' ? entry.createdAt : Date.now(),
+        playerCount:
+          typeof entry.playerCount === 'number' ? entry.playerCount : state.players.length,
+        config: entry.config,
+      });
+
+      restoredGames += 1;
+    } catch (error) {
+      console.warn('Failed to restore game snapshot:', error);
+    }
+  }
+
+  const restoredTokenGames = playerAuthManager.importTokenSnapshot(snapshot.playerTokens);
+  if (restoredGames > 0 || restoredTokenGames > 0) {
+    console.log('[runtime] snapshot restored', {
+      games: restoredGames,
+      tokenGames: restoredTokenGames,
+      savedAt: new Date(snapshot.savedAt).toISOString(),
+      path: getRuntimeSnapshotPath(),
+    });
+  }
+}
+
 const broadcaster = {
-  broadcastGameState: (gameId: string, _state: unknown) => wsHandler.broadcastGameState(gameId),
+  broadcastGameState: (gameId: string, _state: unknown) => {
+    wsHandler.broadcastGameState(gameId);
+    scheduleRuntimePersistence('broadcast-game-state');
+  },
   broadcastBotThinking: (gameId: string, payload: unknown) => wsHandler.broadcast(gameId, 'bot_thinking', payload),
   broadcastBotDecision: (gameId: string, payload: unknown) => wsHandler.broadcast(gameId, 'bot_decision', payload),
 };
@@ -180,6 +298,8 @@ const orchestrator = new GameOrchestrator(
   broadcaster,
   gameLock
 );
+
+restoreRuntimeState();
 
 // REST API路由
 
@@ -261,6 +381,7 @@ app.post('/api/game/init', async (req, res) => {
       playerCount: config.players.length,
       config,
     });
+    flushRuntimePersistence('game-init');
 
     // 记录到数据库
     try {
@@ -436,6 +557,14 @@ app.post('/api/game/action', async (req, res) => {
       });
     }
 
+    const game = wsHandler.getGame(normalizedGameId);
+    if (!game) {
+      return res.status(404).json({
+        success: false,
+        error: '游戏不存在，可能已失效，请重新创建牌局',
+      });
+    }
+
     if (!playerAuthManager.validate(normalizedGameId, normalizedPlayerId, normalizedPlayerToken)) {
       return res.status(403).json({
         success: false,
@@ -450,7 +579,7 @@ app.post('/api/game/action', async (req, res) => {
         normalizedActionId,
       );
       if (!accepted) {
-        const currentGame = wsHandler.getGame(normalizedGameId);
+        const currentGame = wsHandler.getGame(normalizedGameId) ?? game;
         return res.json({
           success: true,
           data: currentGame
@@ -476,11 +605,11 @@ app.post('/api/game/action', async (req, res) => {
 
     if (result.success) {
       // 获取最新状态返回给前端
-      const game = wsHandler.getGame(normalizedGameId);
+      const latestGame = wsHandler.getGame(normalizedGameId) ?? game;
       res.json({
         success: true,
-        data: game
-          ? projectGameStateForViewer(game.getGameState(), normalizedPlayerId)
+        data: latestGame
+          ? projectGameStateForViewer(latestGame.getGameState(), normalizedPlayerId)
           : undefined,
       });
     } else {
@@ -539,15 +668,28 @@ app.post('/api/game/settle-showdown', async (req, res) => {
       });
     }
 
-    const viewerCheck = resolveRequiredViewer(
-      normalizedGameId,
-      viewer.playerId,
-      viewer.playerToken,
-    );
-    if (!viewerCheck.ok) {
-      return res.status(viewerCheck.status).json({
+    const gameState = game.getGameState();
+    const isBotOnlyTable =
+      gameState.players.length > 0 && gameState.players.every((player) => player.isBot);
+
+    let viewerPlayerId: string | undefined;
+    if (viewer.playerId || viewer.playerToken) {
+      const viewerCheck = resolveRequiredViewer(
+        normalizedGameId,
+        viewer.playerId,
+        viewer.playerToken,
+      );
+      if (!viewerCheck.ok) {
+        return res.status(viewerCheck.status).json({
+          success: false,
+          error: viewerCheck.error,
+        });
+      }
+      viewerPlayerId = viewerCheck.viewerPlayerId;
+    } else if (!isBotOnlyTable) {
+      return res.status(401).json({
         success: false,
-        error: viewerCheck.error,
+        error: '玩家身份信息不完整',
       });
     }
 
@@ -563,7 +705,7 @@ app.post('/api/game/settle-showdown', async (req, res) => {
       success: true,
       data: projectGameStateForViewer(
         game.getGameState(),
-        viewerCheck.viewerPlayerId,
+        viewerPlayerId,
       ),
     });
   } catch (error) {
@@ -667,15 +809,28 @@ app.post('/api/game/next-round', async (req, res) => {
         throw new Error('Game not found');
       }
 
-      const viewerCheck = resolveRequiredViewer(
-        normalizedGameId,
-        viewer.playerId,
-        viewer.playerToken,
-      );
-      if (!viewerCheck.ok) {
-        return res
-          .status(viewerCheck.status)
-          .json({ success: false, error: viewerCheck.error });
+      const gameState = game.getGameState();
+      const isBotOnlyTable =
+        gameState.players.length > 0 && gameState.players.every((player) => player.isBot);
+
+      let viewerPlayerId: string | undefined;
+      if (viewer.playerId || viewer.playerToken) {
+        const viewerCheck = resolveRequiredViewer(
+          normalizedGameId,
+          viewer.playerId,
+          viewer.playerToken,
+        );
+        if (!viewerCheck.ok) {
+          return res
+            .status(viewerCheck.status)
+            .json({ success: false, error: viewerCheck.error });
+        }
+        viewerPlayerId = viewerCheck.viewerPlayerId;
+      } else if (!isBotOnlyTable) {
+        return res.status(401).json({
+          success: false,
+          error: '玩家身份信息不完整',
+        });
       }
       
       const result = await orchestrator.startNextRound(normalizedGameId);
@@ -683,7 +838,7 @@ app.post('/api/game/next-round', async (req, res) => {
         success: result.success,
         data: projectGameStateForViewer(
           result.data,
-          viewerCheck.viewerPlayerId,
+          viewerPlayerId,
         ),
       });
     } catch (error) {
@@ -718,12 +873,16 @@ async function startServer() {
 void startServer();
 
 // 优雅关闭
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully...');
+function shutdown(signal: 'SIGTERM' | 'SIGINT'): void {
+  console.log(`${signal} received, shutting down gracefully...`);
+  flushRuntimePersistence(`shutdown-${signal.toLowerCase()}`);
   process.exit(0);
+}
+
+process.on('SIGTERM', () => {
+  shutdown('SIGTERM');
 });
 
 process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully...');
-  process.exit(0);
+  shutdown('SIGINT');
 });

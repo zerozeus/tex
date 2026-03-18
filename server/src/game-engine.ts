@@ -81,6 +81,11 @@ interface HandEvaluation {
   description: string;
 }
 
+export type GameEngineSnapshot = {
+  gameState: GameState;
+  remainingDeck: Card[];
+};
+
 export class GameEngine {
   private gameState: GameState;
   private remainingDeck: Card[];
@@ -305,6 +310,96 @@ export class GameEngine {
     return JSON.parse(JSON.stringify(this.gameState));
   }
 
+  public exportSnapshot(): GameEngineSnapshot {
+    return {
+      gameState: this.getGameState(),
+      remainingDeck: JSON.parse(JSON.stringify(this.remainingDeck)) as Card[],
+    };
+  }
+
+  public static fromSnapshot(snapshot: GameEngineSnapshot): GameEngine {
+    if (!snapshot || typeof snapshot !== "object") {
+      throw new Error("Invalid game snapshot");
+    }
+
+    const state = JSON.parse(JSON.stringify(snapshot.gameState)) as GameState;
+    const deckFromSnapshot = Array.isArray(snapshot.remainingDeck)
+      ? (JSON.parse(JSON.stringify(snapshot.remainingDeck)) as Card[])
+      : [];
+
+    if (!state || !Array.isArray(state.players) || state.players.length < 2) {
+      throw new Error("Invalid game state in snapshot");
+    }
+
+    const engine = Object.create(GameEngine.prototype) as GameEngine;
+    engine.gameState = state;
+    engine.remainingDeck =
+      deckFromSnapshot.length > 0
+        ? deckFromSnapshot
+        : GameEngine.rebuildRemainingDeckFromState(state);
+
+    return engine;
+  }
+
+  private static rebuildRemainingDeckFromState(state: GameState): Card[] {
+    const fullDeck = GameEngine.createOrderedDeck();
+    const usedCounter = new Map<string, number>();
+
+    const markUsed = (card: Card | undefined) => {
+      if (!card) return;
+      if (card.rank === "?" || card.value <= 0) return;
+      const key = `${card.suit}-${card.rank}-${card.value}`;
+      usedCounter.set(key, (usedCounter.get(key) ?? 0) + 1);
+    };
+
+    state.communityCards.forEach(markUsed);
+    state.players.forEach((player) => player.cards.forEach(markUsed));
+
+    const remainingDeck: Card[] = [];
+    for (const card of fullDeck) {
+      const key = `${card.suit}-${card.rank}-${card.value}`;
+      const count = usedCounter.get(key) ?? 0;
+      if (count > 0) {
+        usedCounter.set(key, count - 1);
+        continue;
+      }
+      remainingDeck.push(card);
+    }
+
+    for (let i = remainingDeck.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [remainingDeck[i], remainingDeck[j]] = [remainingDeck[j], remainingDeck[i]];
+    }
+
+    return remainingDeck;
+  }
+
+  private static createOrderedDeck(): Card[] {
+    const suits: Card["suit"][] = ["♠", "♥", "♦", "♣"];
+    const ranks = [
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "J",
+      "Q",
+      "K",
+      "A",
+    ];
+    const deck: Card[] = [];
+    for (const suit of suits) {
+      for (const rank of ranks) {
+        deck.push({ suit, rank, value: ranks.indexOf(rank) + 2 });
+      }
+    }
+    return deck;
+  }
+
   public settleShowdown(): { success: boolean; error?: string } {
     if (this.gameState.phase !== "showdown") {
       return { success: false, error: "当前不在摊牌阶段" };
@@ -360,7 +455,8 @@ export class GameEngine {
   public handleAction(
     playerId: string,
     action: string,
-    amount?: number
+    amount?: number,
+    chat?: string
   ): { success: boolean; error?: string } {
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
@@ -625,7 +721,8 @@ export class GameEngine {
     this.recordActionEvent(
       currentPlayer,
       action as GameHistoryEvent["action"],
-      committedAmount
+      committedAmount,
+      chat
     );
 
     // 移动到下一个玩家
@@ -681,10 +778,14 @@ export class GameEngine {
       // 所有玩家都行动完成且下注相等，进入下一阶段
       console.log(`>>> 准备进入下一阶段: ${this.gameState.phase} -> next`);
 
-      // 检查是否所有活跃玩家都已All-In
-      // 只有当没有任何 actionablePlayers (即 !isAllIn) 时，才自动 runOutBoard
       const actionablePlayers = activePlayers.filter((p) => this.canPlayerAct(p));
-      if (actionablePlayers.length === 0) {
+      const nonAllInPlayers = activePlayers.filter((p) => !p.isAllIn);
+
+      // 只剩一个未全押玩家时，后续不存在有效下注空间，直接跑牌到摊牌
+      if (nonAllInPlayers.length <= 1) {
+        console.log("Only one non-all-in player left. Running out board.");
+        this.runOutBoard();
+      } else if (actionablePlayers.length === 0) {
         console.log("No actionable players left. Running out board.");
         this.runOutBoard();
       } else {
@@ -1344,13 +1445,20 @@ export class GameEngine {
   private recordActionEvent(
     player: Player,
     action: GameHistoryEvent["action"],
-    committedAmount: number
+    committedAmount: number,
+    chat?: string
   ): void {
+    const normalizedChat =
+      typeof chat === "string" && chat.trim().length > 0
+        ? chat.trim()
+        : undefined;
+
     this.appendHistoryEvent({
       kind: "action",
       phase: this.gameState.phase,
       playerId: player.id,
       playerName: player.name,
+      chat: normalizedChat,
       action,
       amount: committedAmount > 0 ? committedAmount : undefined,
       pot: this.gameState.pot,
