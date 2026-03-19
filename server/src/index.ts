@@ -50,8 +50,19 @@ app.use(cors());
 app.use(express.json());
 app.use('/assets', express.static(path.join(projectRoot, 'assets')));
 
-const DEBUG_LOG = process.env.POKER_DEBUG === '1';
+const DEBUG_LOG = process.env.POKER_DEBUG !== '0';
 const ENABLE_RUNTIME_SNAPSHOT = dev;
+
+function getPositiveMsFromEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name] ?? '');
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
+const GAME_IDLE_TTL_MS = getPositiveMsFromEnv('GAME_IDLE_TTL_MS', 30 * 60 * 1000);
+const GAME_SWEEP_INTERVAL_MS = getPositiveMsFromEnv('GAME_SWEEP_INTERVAL_MS', 60 * 1000);
 
 function safeStringify(value: unknown, maxLength = 2000): string {
   try {
@@ -113,6 +124,7 @@ app.use((req, res, next) => {
 type StoredGameInfo = {
   id: string;
   createdAt: number;
+  lastActivityAt: number;
   playerCount: number;
   config: GameConfig;
 };
@@ -180,6 +192,7 @@ const gameLock = new GameLock();
 
 let runtimePersistTimer: NodeJS.Timeout | null = null;
 let runtimePersistReason = 'unknown';
+let gameCleanupTimer: NodeJS.Timeout | null = null;
 
 function buildRuntimeGameSnapshots(): RuntimeGameSnapshot[] {
   const snapshots: RuntimeGameSnapshot[] = [];
@@ -258,9 +271,11 @@ function restoreRuntimeState(): void {
       wsHandler.getGamesMap().set(entry.gameId, engine);
 
       const state = engine.getGameState();
+      const now = Date.now();
       games.set(entry.gameId, {
         id: entry.gameId,
-        createdAt: typeof entry.createdAt === 'number' ? entry.createdAt : Date.now(),
+        createdAt: typeof entry.createdAt === 'number' ? entry.createdAt : now,
+        lastActivityAt: now,
         playerCount:
           typeof entry.playerCount === 'number' ? entry.playerCount : state.players.length,
         config: entry.config,
@@ -299,7 +314,77 @@ const orchestrator = new GameOrchestrator(
   gameLock
 );
 
+function touchGame(gameId: string): void {
+  const gameInfo = games.get(gameId);
+  if (!gameInfo) return;
+  gameInfo.lastActivityAt = Date.now();
+}
+
+function releaseGameResources(gameId: string, reason: string): void {
+  const hadMeta = games.delete(gameId);
+  const hadEngine = wsHandler.getGamesMap().delete(gameId);
+  playerAuthManager.revokeGame(gameId);
+  orchestrator.cleanupGame(gameId);
+
+  if (!hadMeta && !hadEngine) {
+    return;
+  }
+
+  console.log('[runtime] game released', {
+    gameId,
+    reason,
+    hadMeta,
+    hadEngine,
+  });
+  scheduleRuntimePersistence(`game-release:${reason}`);
+}
+
+function sweepInactiveGames(reason: string): void {
+  const now = Date.now();
+  let released = 0;
+
+  for (const [gameId, gameInfo] of games.entries()) {
+    if (!wsHandler.getGame(gameId)) {
+      releaseGameResources(gameId, `${reason}:engine-missing`);
+      released += 1;
+      continue;
+    }
+
+    const activeClients = wsHandler.getClientCountForGame(gameId);
+    if (activeClients > 0) {
+      gameInfo.lastActivityAt = now;
+      continue;
+    }
+
+    if (now - gameInfo.lastActivityAt < GAME_IDLE_TTL_MS) {
+      continue;
+    }
+
+    releaseGameResources(gameId, `${reason}:idle-timeout`);
+    released += 1;
+  }
+
+  if (DEBUG_LOG && released > 0) {
+    console.log('[runtime] inactive games swept', {
+      reason,
+      released,
+      remaining: games.size,
+    });
+  }
+}
+
+function startInactiveGameSweeper(): void {
+  if (gameCleanupTimer) return;
+  gameCleanupTimer = setInterval(() => {
+    sweepInactiveGames('interval');
+  }, GAME_SWEEP_INTERVAL_MS);
+  if (typeof gameCleanupTimer.unref === 'function') {
+    gameCleanupTimer.unref();
+  }
+}
+
 restoreRuntimeState();
+startInactiveGameSweeper();
 
 // REST API路由
 
@@ -375,9 +460,11 @@ app.post('/api/game/init', async (req, res) => {
     }));
 
     // 存储游戏信息
+    const now = Date.now();
     games.set(gameId, {
       id: gameId,
-      createdAt: Date.now(),
+      createdAt: now,
+      lastActivityAt: now,
       playerCount: config.players.length,
       config,
     });
@@ -447,6 +534,8 @@ app.get('/api/game/state', (req, res) => {
       });
     }
 
+    touchGame(normalizedGameId);
+
     res.json({
       success: true,
       data: projectGameStateForViewer(
@@ -501,6 +590,8 @@ app.post('/api/game/state', (req, res) => {
         error: viewerCheck.error,
       });
     }
+
+    touchGame(normalizedGameId);
 
     res.json({
       success: true,
@@ -571,6 +662,8 @@ app.post('/api/game/action', async (req, res) => {
         error: '玩家身份校验失败',
       });
     }
+
+    touchGame(normalizedGameId);
 
     if (normalizedActionId) {
       const accepted = playerAuthManager.reserveAction(
@@ -693,6 +786,8 @@ app.post('/api/game/settle-showdown', async (req, res) => {
       });
     }
 
+    touchGame(normalizedGameId);
+
     const result = await orchestrator.settleShowdown(normalizedGameId);
     if (!result.success) {
       return res.status(400).json({
@@ -757,6 +852,8 @@ app.post('/api/game/next-phase', (req, res) => {
         error: viewerCheck.error,
       });
     }
+
+    touchGame(normalizedGameId);
 
     res.json({
       success: true,
@@ -832,6 +929,8 @@ app.post('/api/game/next-round', async (req, res) => {
           error: '玩家身份信息不完整',
         });
       }
+
+      touchGame(normalizedGameId);
       
       const result = await orchestrator.startNextRound(normalizedGameId);
       res.json({
@@ -875,6 +974,10 @@ void startServer();
 // 优雅关闭
 function shutdown(signal: 'SIGTERM' | 'SIGINT'): void {
   console.log(`${signal} received, shutting down gracefully...`);
+  if (gameCleanupTimer) {
+    clearInterval(gameCleanupTimer);
+    gameCleanupTimer = null;
+  }
   flushRuntimePersistence(`shutdown-${signal.toLowerCase()}`);
   process.exit(0);
 }

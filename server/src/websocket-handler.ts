@@ -4,7 +4,7 @@ import type { Socket } from 'net';
 import { GameEngine } from './game-engine';
 import { WSMessage, WSClient, GameConfig, PlayerAction, GameState } from './types';
 
-const DEBUG_LOG = process.env.POKER_DEBUG === '1';
+const DEBUG_LOG = process.env.POKER_DEBUG !== '0';
 
 function getPositiveMsFromEnv(name: string, fallback: number): number {
   const value = Number(process.env[name] ?? '');
@@ -538,6 +538,16 @@ export class WebSocketHandler {
 
   public getGame(gameId: string): GameEngine | undefined {
     return this.games.get(gameId);
+  }
+
+  public getClientCountForGame(gameId: string): number {
+    let count = 0;
+    this.clients.forEach((client) => {
+      if (client.gameId === gameId && client.ws.readyState === WebSocket.OPEN) {
+        count += 1;
+      }
+    });
+    return count;
   }
 
   public getGamesMap(): Map<string, GameEngine> {

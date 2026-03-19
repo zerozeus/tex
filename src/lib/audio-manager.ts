@@ -107,21 +107,10 @@ class AudioManager {
   private bgmVolume = 1;
   private sfxVolume = 0.85;
 
-  private log(message: string, payload?: Record<string, unknown>): void {
-    if (payload) {
-      console.log(`[audio] ${message}`, payload);
-      return;
-    }
-    console.log(`[audio] ${message}`);
-  }
+  // 音频模块内部日志默认静默，避免干扰正式环境排查核心链路。
+  private log(_message: string, _payload?: Record<string, unknown>): void {}
 
-  private warn(message: string, payload?: Record<string, unknown>): void {
-    if (payload) {
-      console.warn(`[audio] ${message}`, payload);
-      return;
-    }
-    console.warn(`[audio] ${message}`);
-  }
+  private warn(_message: string, _payload?: Record<string, unknown>): void {}
 
   bindUserGesture(): void {
     if (this.gestureBound || typeof window === 'undefined') return;

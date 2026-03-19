@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const gameServerUrl = process.env.GAME_SERVER_URL || 'http://localhost:5001';
-    const debug = process.env.POKER_DEBUG === '1';
+    const debug = process.env.POKER_DEBUG !== '0';
     
     // 调用游戏服务器
     const start = Date.now();

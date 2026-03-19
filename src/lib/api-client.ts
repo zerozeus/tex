@@ -34,7 +34,7 @@ type ViewerCredential = {
   playerToken?: string;
 };
 
-const API_DEBUG = process.env.NEXT_PUBLIC_POKER_DEBUG === '1';
+const API_DEBUG = process.env.NEXT_PUBLIC_POKER_DEBUG !== '0';
 
 function safeStringify(value: unknown, maxLength = 2000): string {
   try {

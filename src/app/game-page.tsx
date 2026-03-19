@@ -79,12 +79,15 @@ interface GameState {
 }
 
 // 控制台日志类型
+type ConsoleLogEmphasis = 'bot_action' | 'bot_reason' | 'bot_chat';
+
 interface ConsoleLog {
   id: string;
   type: 'info' | 'action' | 'phase' | 'pot' | 'error';
   timestamp: string;
   message: string;
   playerName?: string;
+  emphasis?: ConsoleLogEmphasis;
 }
 
 export default function TexasHoldem() {
@@ -93,7 +96,7 @@ export default function TexasHoldem() {
   const gameId = searchParams.get('gameId');
   const currentPlayerId = searchParams.get('playerId') || '';
   const playerToken = searchParams.get('playerToken') || '';
-  const DEBUG = process.env.NEXT_PUBLIC_POKER_DEBUG === '1';
+  const DEBUG = process.env.NEXT_PUBLIC_POKER_DEBUG !== '0';
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -115,15 +118,42 @@ export default function TexasHoldem() {
     mobileConsoleEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }
 
+  const mirrorConsoleLog = (entry: ConsoleLog): void => {
+    const context = {
+      timestamp: entry.timestamp,
+      playerName: entry.playerName,
+      emphasis: entry.emphasis,
+    };
+
+    if (entry.type === 'error') {
+      console.error('[ui]', entry.message, context);
+      return;
+    }
+
+    if (entry.type === 'action') {
+      console.info('[ui]', entry.message, context);
+      return;
+    }
+
+    console.log('[ui]', entry.message, context);
+  };
+
   // 添加控制台日志
-  const addConsoleLog = (type: ConsoleLog['type'], message: string, playerName?: string) => {
+  const addConsoleLog = (
+    type: ConsoleLog['type'],
+    message: string,
+    playerName?: string,
+    emphasis?: ConsoleLogEmphasis,
+  ) => {
     const newLog: ConsoleLog = {
       id: `${Date.now()}-${Math.random()}`,
       type,
       timestamp: new Date().toLocaleTimeString('zh-CN'),
       message,
       playerName,
+      emphasis,
     };
+    mirrorConsoleLog(newLog);
     setConsoleLogs(prev => [...prev, newLog]);
   };
 
@@ -198,6 +228,7 @@ export default function TexasHoldem() {
   const [nextRoundInFlight, setNextRoundInFlight] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectEnabledRef = useRef(false);
 
   const debugLog = (...args: unknown[]) => {
     if (!DEBUG) return;
@@ -751,7 +782,11 @@ export default function TexasHoldem() {
     }
   }
 
-  const getLogLabel = (type: ConsoleLog['type']) => {
+  const getLogLabel = (type: ConsoleLog['type'], emphasis?: ConsoleLogEmphasis) => {
+    if (emphasis === 'bot_action') return '机器人动作';
+    if (emphasis === 'bot_reason') return '机器人推理';
+    if (emphasis === 'bot_chat') return '机器人发言';
+
     switch (type) {
       case 'phase':
         return '状态';
@@ -767,9 +802,56 @@ export default function TexasHoldem() {
     }
   };
 
+  const getLogToneClass = (log: ConsoleLog): string => {
+    if (log.emphasis === 'bot_action') {
+      return 'border-fuchsia-300 bg-fuchsia-900/60 text-fuchsia-50 shadow-[inset_0_0_0_1px_rgba(244,114,182,0.42)]';
+    }
+    if (log.emphasis === 'bot_reason') {
+      return 'border-cyan-300 bg-cyan-900/60 text-cyan-50 shadow-[inset_0_0_0_1px_rgba(103,232,249,0.4)]';
+    }
+    if (log.emphasis === 'bot_chat') {
+      return 'border-amber-300 bg-amber-900/65 text-amber-50 shadow-[inset_0_0_0_1px_rgba(252,211,77,0.42)]';
+    }
+
+    switch (log.type) {
+      case 'action':
+        return 'border-blue-500 bg-blue-500/5 text-blue-200';
+      case 'phase':
+        return 'border-green-500 bg-green-500/5 text-green-200';
+      case 'pot':
+        return 'border-yellow-500 bg-yellow-500/5 text-yellow-200';
+      case 'error':
+        return 'border-red-500 bg-red-500/5 text-red-200';
+      case 'info':
+      default:
+        return 'border-slate-600 text-slate-400';
+    }
+  };
+
+  const getLogLabelBadgeClass = (log: ConsoleLog): string => {
+    if (log.emphasis === 'bot_action') {
+      return 'rounded-full border border-fuchsia-200/80 bg-fuchsia-200/20 px-1.5 py-0.5 text-fuchsia-50';
+    }
+    if (log.emphasis === 'bot_reason') {
+      return 'rounded-full border border-cyan-200/80 bg-cyan-200/20 px-1.5 py-0.5 text-cyan-50';
+    }
+    if (log.emphasis === 'bot_chat') {
+      return 'rounded-full border border-amber-200/80 bg-amber-200/20 px-1.5 py-0.5 text-amber-50';
+    }
+    return '';
+  };
+
   // WebSocket 连接函数
   const connectWebSocket = () => {
-    if (!gameState?.gameId) return;
+    if (!gameState?.gameId || !reconnectEnabledRef.current) return;
+
+    if (
+      wsRef.current &&
+      (wsRef.current.readyState === WebSocket.OPEN ||
+        wsRef.current.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
 
     let wsUrl = '';
     if (API_CONFIG.WS_SERVER_URL) {
@@ -788,10 +870,12 @@ export default function TexasHoldem() {
     debugLog('ws connecting', { wsUrl, gameId: gameState.gameId });
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
-    let active = true;
 
     ws.onopen = () => {
-      if (!active) return;
+      if (!reconnectEnabledRef.current) {
+        ws.close(1000, 'inactive');
+        return;
+      }
       debugLog('ws open', { wsUrl, gameId: gameState.gameId, playerId: currentPlayerId });
       setWsConnected(true);
       addConsoleLog('info', `WebSocket 已连接: ${wsUrl}`);
@@ -817,7 +901,10 @@ export default function TexasHoldem() {
     };
 
     ws.onclose = (event) => {
-      if (!active) return;
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+      }
+      if (!reconnectEnabledRef.current) return;
       debugLog('ws close', { code: event.code, reason: event.reason });
       setWsConnected(false);
       addConsoleLog('error', `WebSocket 已断开 (${event.code})，1秒后自动重连...`);
@@ -827,7 +914,7 @@ export default function TexasHoldem() {
         clearTimeout(reconnectTimerRef.current);
       }
       reconnectTimerRef.current = setTimeout(() => {
-        if (active && gameState?.gameId) {
+        if (reconnectEnabledRef.current && gameState?.gameId) {
           addConsoleLog('info', '正在尝试重连...');
           connectWebSocket();
         }
@@ -835,13 +922,14 @@ export default function TexasHoldem() {
     };
 
     ws.onerror = (event) => {
-      if (!active) return;
+      if (!reconnectEnabledRef.current) return;
       debugLog('ws error', event);
       setWsConnected(false);
       addConsoleLog('error', 'WebSocket 发生错误');
     };
 
     ws.onmessage = (event) => {
+      if (!reconnectEnabledRef.current) return;
       try {
         // 处理 ping 消息
         if (event.data === 'ping') {
@@ -865,12 +953,16 @@ export default function TexasHoldem() {
         if (message.type === 'bot_thinking') {
           addConsoleLog('info', `🤖 ${message.data.playerName} 正在思考...`, message.data.playerName);
         } else if (message.type === 'bot_decision') {
-          const { playerName, action, amount } = message.data;
+          const { playerName, action, amount, reason } = message.data;
           const chat = message.chat;
+          const shouldShowReason = isBotOnlyState(gameState);
           
-          addConsoleLog('action', `🤖 [${playerName}] ${action}${amount ? ` ${amount}` : ''}`, playerName);
+          addConsoleLog('action', `🤖 [${playerName}] ${action}${amount ? ` ${amount}` : ''}`, playerName, 'bot_action');
+          if (shouldShowReason && typeof reason === 'string' && reason.trim()) {
+            addConsoleLog('info', `🧠 [${playerName}] ${reason.trim()}`, playerName, 'bot_reason');
+          }
           if (chat) {
-            addConsoleLog('action', `💬 [${playerName}] ${chat}`, playerName);
+            addConsoleLog('action', `💬 [${playerName}] ${chat}`, playerName, 'bot_chat');
           }
         } else if (message.type === 'game_update' || message.type === 'game_state') {
           if (isGameState(message.data)) {
@@ -884,26 +976,30 @@ export default function TexasHoldem() {
         console.error('WS message error:', e);
       }
     };
-
-    return () => {
-      active = false;
-    };
   };
 
   useEffect(() => {
     if (!gameState?.gameId) return;
 
+    reconnectEnabledRef.current = true;
+
     // 初始连接
     connectWebSocket();
 
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      reconnectEnabledRef.current = false;
+      setWsConnected(false);
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
+      }
+      if (wsRef.current) {
+        wsRef.current.onopen = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.onerror = null;
+        wsRef.current.onclose = null;
+        wsRef.current.close(1000, 'component-cleanup');
+        wsRef.current = null;
       }
     };
   }, [gameState?.gameId, currentPlayerId, playerToken]);
@@ -950,7 +1046,12 @@ export default function TexasHoldem() {
   };
 
   // 渲染扑克牌
-  const renderCard = (card: Card, hidden: boolean = false, size: 'sm' | 'md' = 'md') => {
+  const renderCard = (
+    card: Card,
+    hidden: boolean = false,
+    size: 'sm' | 'md' = 'md',
+    spectatorOverlay: boolean = false,
+  ) => {
     const sizeClass =
       size === 'sm'
         ? 'w-10 h-14 rounded-md border'
@@ -967,15 +1068,28 @@ export default function TexasHoldem() {
     }
 
     const isRed = card.suit === '♥' || card.suit === '♦';
+    const spectatorFaceStyle = spectatorOverlay
+      ? { filter: 'blur(0.9px)', opacity: 0.9 }
+      : undefined;
 
     return (
-      <div className={`${sizeClass} bg-white shadow-md flex flex-col items-center justify-center border-gray-200`}>
-        <div className={`${rankClass} font-bold ${isRed ? 'text-red-600' : 'text-gray-900'}`}>
-          {card.rank}
+      <div
+        className={`${sizeClass} relative overflow-hidden bg-white shadow-md flex flex-col items-center justify-center border-gray-200`}
+      >
+        <div className="relative z-10 flex flex-col items-center justify-center" style={spectatorFaceStyle}>
+          <div className={`${rankClass} font-bold ${isRed ? 'text-red-600' : 'text-gray-900'}`}>
+            {card.rank}
+          </div>
+          <div className={`${suitClass} ${isRed ? 'text-red-600' : 'text-gray-900'}`}>
+            {card.suit}
+          </div>
         </div>
-        <div className={`${suitClass} ${isRed ? 'text-red-600' : 'text-gray-900'}`}>
-          {card.suit}
-        </div>
+        {spectatorOverlay && (
+          <>
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-slate-900/42 via-slate-800/18 to-slate-900/45 backdrop-blur-[1.8px]" />
+            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(130deg,rgba(255,255,255,0.16)_0%,rgba(255,255,255,0.04)_40%,rgba(255,255,255,0)_62%)]" />
+          </>
+        )}
       </div>
     );
   };
@@ -1329,6 +1443,7 @@ export default function TexasHoldem() {
 
   const isMyTurn = gameState.phase !== 'showdown' && gameState.phase !== 'completed' && gameState.players[gameState.currentPlayerIndex]?.id === currentPlayerId;
   const revealOthers = gameState.showdownRevealed === true;
+  const isBotOnlySpectator = isBotOnlyState(gameState) && !viewerCredential;
   const isShowdownPending = gameState.phase === 'showdown' && !gameState.resultReady;
   const isFoldResultPending = gameState.phase === 'completed' && !winnerInfo && resultRevealCountdown > 0;
   const seatedPlayers = rotatePlayers(gameState.players, currentPlayerId);
@@ -1387,7 +1502,8 @@ export default function TexasHoldem() {
 
   function renderSeatCard(player: Player, variant: 'table' | 'compact') {
     const isMe = player.id === currentPlayerId;
-    const hiddenCards = !isMe && (!revealOthers || player.isFolded);
+    const hiddenCards = !isBotOnlySpectator && !isMe && (!revealOthers || player.isFolded);
+    const spectatorCardOverlay = isBotOnlySpectator && player.isBot;
     const cardSize = 'sm' as const;
     const isCompact = variant === 'compact';
     
@@ -1450,7 +1566,7 @@ export default function TexasHoldem() {
                       index === 0 ? '-rotate-3 hover:-translate-x-1' : 'rotate-3 hover:translate-x-1'
                     } hover:-translate-y-2 origin-bottom`}
                   >
-                    {renderCard(card, hiddenCards, cardSize)}
+                    {renderCard(card, hiddenCards, cardSize, spectatorCardOverlay)}
                   </div>
                 ))
               ) : (
@@ -1491,7 +1607,7 @@ export default function TexasHoldem() {
           <div className="flex -space-x-3">
             {player.cards.map((card, index) => (
               <div key={index} className="scale-75 origin-right">
-                {renderCard(card, hiddenCards, cardSize)}
+                {renderCard(card, hiddenCards, cardSize, spectatorCardOverlay)}
               </div>
             ))}
           </div>
@@ -1629,24 +1745,16 @@ export default function TexasHoldem() {
                     consoleLogs.map(log => (
                       <div
                         key={log.id}
-                        className={`relative border-l-2 pl-3 py-1 ${
-                          log.type === 'action'
-                            ? 'border-blue-500 bg-blue-500/5 text-blue-200'
-                            : log.type === 'phase'
-                              ? 'border-green-500 bg-green-500/5 text-green-200'
-                              : log.type === 'pot'
-                                ? 'border-yellow-500 bg-yellow-500/5 text-yellow-200'
-                                : log.type === 'error'
-                                  ? 'border-red-500 bg-red-500/5 text-red-200'
-                                  : 'border-slate-600 text-slate-400'
-                        }`}
+                        className={`relative rounded-r-md border-l-2 pl-3 py-1.5 ${getLogToneClass(log)}`}
                       >
                         <div className="flex flex-col gap-0.5">
-                          <div className="flex items-center justify-between text-[10px] opacity-70">
+                          <div className={`flex items-center justify-between text-[10px] ${log.emphasis ? 'opacity-95' : 'opacity-70'}`}>
                             <span>{log.timestamp}</span>
-                            <span className="font-bold">{getLogLabel(log.type)}</span>
+                            <span className={`font-black ${getLogLabelBadgeClass(log)}`}>
+                              {getLogLabel(log.type, log.emphasis)}
+                            </span>
                           </div>
-                          <div className="leading-relaxed break-words">
+                          <div className={`leading-relaxed break-words ${log.emphasis ? 'font-semibold' : ''}`}>
                             {log.playerName ? `[${log.playerName}] ` : ''}
                             {log.message}
                           </div>
@@ -2077,7 +2185,7 @@ export default function TexasHoldem() {
                         {holeCards.length > 0 && (
                           <div className="mt-2 flex items-center gap-2">
                             {holeCards.map((card, idx) => (
-                              <div key={idx}>{renderCard(card, player.id !== currentPlayerId && player.isFolded, 'sm')}</div>
+                              <div key={idx}>{renderCard(card, player.id !== currentPlayerId && player.isFolded, 'sm', isBotOnlySpectator && player.isBot)}</div>
                             ))}
                           </div>
                         )}
@@ -2159,24 +2267,16 @@ export default function TexasHoldem() {
                   consoleLogs.map(log => (
                     <div
                       key={log.id}
-                      className={`relative border-l-2 pl-3 py-1 ${
-                        log.type === 'action'
-                          ? 'border-blue-500 bg-blue-500/5 text-blue-200'
-                          : log.type === 'phase'
-                            ? 'border-green-500 bg-green-500/5 text-green-200'
-                            : log.type === 'pot'
-                              ? 'border-yellow-500 bg-yellow-500/5 text-yellow-200'
-                              : log.type === 'error'
-                                ? 'border-red-500 bg-red-500/5 text-red-200'
-                                : 'border-slate-600 text-slate-400'
-                      }`}
+                      className={`relative rounded-r-md border-l-2 pl-3 py-1.5 ${getLogToneClass(log)}`}
                     >
                       <div className="flex flex-col gap-0.5">
-                        <div className="flex items-center justify-between text-[10px] opacity-70">
+                        <div className={`flex items-center justify-between text-[10px] ${log.emphasis ? 'opacity-95' : 'opacity-70'}`}>
                           <span>{log.timestamp}</span>
-                          <span className="font-bold">{getLogLabel(log.type)}</span>
+                          <span className={`font-black ${getLogLabelBadgeClass(log)}`}>
+                            {getLogLabel(log.type, log.emphasis)}
+                          </span>
                         </div>
-                        <div className="leading-relaxed break-words">
+                        <div className={`leading-relaxed break-words ${log.emphasis ? 'font-semibold' : ''}`}>
                           {log.playerName ? `[${log.playerName}] ` : ''}
                           {log.message}
                         </div>

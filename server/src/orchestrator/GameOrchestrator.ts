@@ -4,7 +4,7 @@ import { GameLock } from '../infra/GameLock';
 import { gameDatabaseService } from '../storage/database/game-database.service';
 import { GameState, Player } from '../types';
 
-const DEBUG_LOG = process.env.POKER_DEBUG === '1';
+const DEBUG_LOG = process.env.POKER_DEBUG !== '0';
 
 function summarizeState(state: GameState): Record<string, unknown> {
   return {
@@ -187,6 +187,10 @@ export class GameOrchestrator {
     });
   }
 
+  cleanupGame(gameId: string): void {
+    this.handResultNotified.delete(gameId);
+  }
+
   private async driveBots(gameId: string, engine: GameEngine) {
     const MAX_CHAIN_STEPS = 20;
 
@@ -218,6 +222,7 @@ export class GameOrchestrator {
         decision = this.makeFallbackDecision(engine, bot.id);
       }
       debugLog('bot:decision', { gameId, step: i, botId: bot.id, action: decision.action, amount: decision.amount ?? null });
+      const botOnlyTable = state.players.length > 0 && state.players.every((player) => player.isBot);
 
       await this.broadcaster.broadcastBotDecision(gameId, {
         type: 'bot_decision',
@@ -227,6 +232,7 @@ export class GameOrchestrator {
         action: decision.action,
         amount: decision.amount,
         chat: decision.chat,
+        reason: botOnlyTable ? decision.reason : undefined,
       });
 
       // Capture state before bot action

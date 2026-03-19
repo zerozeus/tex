@@ -20,7 +20,17 @@ function sanitizePlayerMeta(player: Player): Player {
   };
 }
 
-function shouldRevealCards(state: GameState, player: Player, viewerPlayerId?: string): boolean {
+function isBotOnlyTable(state: GameState): boolean {
+  return state.players.length > 0 && state.players.every((player) => player.isBot);
+}
+
+function shouldRevealCards(
+  state: GameState,
+  player: Player,
+  viewerPlayerId: string | undefined,
+  botOnlySpectatorView: boolean,
+): boolean {
+  if (botOnlySpectatorView) return true;
   if (viewerPlayerId && player.id === viewerPlayerId) return true;
   if (!state.showdownRevealed) return false;
   return !player.isFolded;
@@ -31,9 +41,15 @@ export function projectGameStateForViewer(
   viewerPlayerId?: string,
 ): GameState {
   const projected = cloneState(state);
+  const botOnlySpectatorView = !viewerPlayerId && isBotOnlyTable(projected);
 
   projected.players = projected.players.map((player) => {
-    const revealCards = shouldRevealCards(projected, player, viewerPlayerId);
+    const revealCards = shouldRevealCards(
+      projected,
+      player,
+      viewerPlayerId,
+      botOnlySpectatorView,
+    );
     const visibleCards = revealCards
       ? player.cards
       : player.cards.map(() => ({ ...MASK_CARD }));

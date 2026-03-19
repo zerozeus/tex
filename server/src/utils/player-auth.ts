@@ -42,6 +42,11 @@ export class PlayerAuthManager {
     return this.safeEquals(expectedToken, token);
   }
 
+  revokeGame(gameId: string): void {
+    this.gameTokens.delete(gameId);
+    this.actionWindows.delete(gameId);
+  }
+
   exportTokenSnapshot(): PlayerTokenSnapshot {
     const snapshot: PlayerTokenSnapshot = {};
 
