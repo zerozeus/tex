@@ -13,12 +13,12 @@ import {
  * 请求体:
  * {
  *   "players": [
- *     { "id": 1, "name": "玩家 1", "chips": 1000 },
- *     { "id": 2, "name": "玩家 2", "chips": 1000 },
- *     { "id": 3, "name": "玩家 3", "chips": 1000 }
+ *     { "id": 1, "name": "玩家 1", "chips": 2000 },
+ *     { "id": 2, "name": "玩家 2", "chips": 2000 },
+ *     { "id": 3, "name": "玩家 3", "chips": 2000 }
  *   ],
- *   "smallBlind": 10,
- *   "bigBlind": 20,
+ *   "smallBlind": 100,
+ *   "bigBlind": 200,
  *   "timeLimit": 30
  * }
  * 
@@ -40,7 +40,7 @@ import {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { players, smallBlind = 10, bigBlind = 20, timeLimit = 30 } = body;
+    const { players, smallBlind = 100, bigBlind = 200, timeLimit = 30 } = body;
 
     // 验证玩家数量（2-9人）
     if (!players || players.length < 2 || players.length > 9) {

@@ -141,15 +141,16 @@ function applyDefaultBots(players: PlayerConfig[], botTemplates: BotTemplate[]):
 
 export default function GameSetup() {
   const router = useRouter();
-  const [playerCount, setPlayerCount] = useState(3);
+  const [playerCount, setPlayerCount] = useState(4);
   const [players, setPlayers] = useState<PlayerConfig[]>([
     { id: 1, name: '玩家 1', isBot: false },
     { id: 2, name: '机器人 Alice', isBot: true, botToken: '', botId: '7615209749759426602', apiUrl: 'https://rz2qynsv9r.coze.site/stream_run' },
     { id: 3, name: '机器人 Bob', isBot: true, botToken: '', botId: '7615209749759426602', apiUrl: 'https://rz2qynsv9r.coze.site/stream_run' },
+    { id: 4, name: '机器人 Charlie', isBot: true, botToken: '', botId: '7615209749759426602', apiUrl: 'https://rz2qynsv9r.coze.site/stream_run' },
   ]);
-  const [initialChips, setInitialChips] = useState(1000);
-  const [smallBlind, setSmallBlind] = useState(10);
-  const [bigBlind, setBigBlind] = useState(20);
+  const [initialChips, setInitialChips] = useState(2000);
+  const [smallBlind, setSmallBlind] = useState(100);
+  const [bigBlind, setBigBlind] = useState(200);
   const [timeLimit, setTimeLimit] = useState(30);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
